@@ -1,43 +1,34 @@
 # LeadSprint
 
-A working repo for lead generation research, prospect list building, enrichment, and outreach assets.
+LeadSprint is an organization-first lead contact platform for generating leads, ingesting leads from external sources, and engaging hot inbound leads quickly.
 
-## Goals
+## Current status
 
-- collect and organize target accounts
-- track ICPs, niches, and sourcing rules
-- store repeatable research/enrichment scripts
-- produce clean outreach-ready exports
+This repo now contains:
+- product and architecture docs in `docs/`
+- an initial Next.js application scaffold in `src/`
+- a first-pass UI shell for Dashboard, Leads, and Reports
 
-## Suggested workflow
+## Getting started
 
-1. Define target market and ICP in `docs/`
-2. Add raw lead sources to `data/`
-3. Use scripts in `src/` to clean, enrich, and dedupe
-4. Write outreach copy in `outreach/`
-5. Export final lists for campaign use
-
-## Repo structure
-
-```text
-LeadSprint/
-├── data/
-│   ├── samples/          # safe sample inputs you can commit
-│   └── schemas/          # column definitions / import templates
-├── docs/
-│   ├── icp.md            # ideal customer profile
-│   ├── pipeline.md       # lead flow and operating notes
-│   └── sourcing.md       # sources, search patterns, exclusions
-├── outreach/
-│   ├── email/
-│   └── linkedin/
-├── src/
-│   └── README.md         # scripts and automation entrypoints
-└── templates/
-    └── lead-list.csv     # starter CSV schema
+```bash
+npm install
+npm run dev
 ```
 
-## Notes
+Then open <http://localhost:3000>.
+
+## Key docs
+
+- `docs/project-memory.md`
+- `docs/product-brief.md`
+- `docs/data-model.md`
+- `docs/database-schema.md`
+- `docs/inbound-flow.md`
+- `docs/technical-architecture.md`
+- `docs/ui-screens.md`
+
+## Repo notes
 
 - Keep secrets in local `.env` files, not in git.
 - Put only safe sample data in the repo.

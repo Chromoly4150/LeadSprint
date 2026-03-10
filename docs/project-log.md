@@ -29,3 +29,5 @@
 - Added `docs/ui-screens.md` with a concrete screen/layout proposal for Dashboard, Leads, Reports, and the embedded lead-detail conversation workflow.
 - Expanded the model/UI direction so each lead supports internal org-only notes and a full timestamped communication log.
 - Captured the need for privileged users to review recent communication context across email, SMS, and calls, with notes attachable directly to call records.
+- Added `docs/database-schema.md` translating the conceptual model into a first-pass relational schema with core tables, indexes, controlled values, and migration order.
+- Scaffolded the initial Next.js application shell in the repo with a first-pass Dashboard / Leads / Reports UI and verified it builds successfully.
