@@ -19,3 +19,9 @@
 - Added `docs/inbound-flow.md` to define the end-to-end hot inbound lead workflow: intake, normalization, sufficiency evaluation, rapid response, bot engagement, routing, handoff, and SLA/audit considerations.
 - Added `docs/mvp.md` to define the smallest buildable version of LeadSprint focused on organization support, inbound intake, rapid response, conversation continuity, and role-aware operation.
 - Added `docs/permissions.md` to define the first-pass role and permission model for Owner, Admin, General User, and Support User, including sensitive messaging controls.
+- Chose a **modular monolith** as the current architectural direction.
+- Added `docs/ui-map.md` and `docs/architecture.md` capturing the first UI/navigation shape.
+- Defined initial top-level tabs as **Dashboard**, **Leads**, and **Reports**.
+- Captured Dashboard direction around overview metrics such as recent inbound leads and conversion metrics.
+- Captured Leads direction around sortable/filterable lead lists, including separation between lifecycle status and urgency/indicator status (such as Hot).
+- Captured Reports direction around exports, printable views, and operational reporting.

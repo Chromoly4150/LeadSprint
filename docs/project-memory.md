@@ -70,6 +70,40 @@ The platform should be designed so that **any company type** can use it, not jus
 ### Permission philosophy
 Permissions will be defined later, but role separation matters because organizations may want some users to help operate the system without allowing sensitive actions like messaging leads.
 
+### Architecture direction
+The current preferred architecture is a **modular monolith**.
+
+### Initial UI navigation
+The initial top-level tabs should be:
+- Dashboard
+- Leads
+- Reports
+
+### Dashboard direction
+The Dashboard should provide general overview metrics such as inbound leads over recent time windows (for example 30 days), conversion metrics, and other high-level summaries with sorting/time options.
+
+### Leads direction
+The Leads tab should show a sortable/filterable lead list.
+
+Initial sort options include:
+- most recently received
+- most recently managed/edited
+- most recently contacted
+- alphabetical
+
+Initial filters should include:
+- state
+- lead status
+
+The product should distinguish between:
+- lifecycle status (for example New, Contacted, etc.)
+- urgency/indicator status (for example Hot)
+
+This separation matters because urgency is not the same as workflow state.
+
+### Reports direction
+The Reports tab should support reporting workflows such as export to spreadsheet, printable outputs, and other reporting needs to be refined later.
+
 Example permission areas:
 - user management
 - organization settings
