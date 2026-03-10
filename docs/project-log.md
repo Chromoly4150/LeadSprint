@@ -17,3 +17,5 @@
 - Captured a core conversion-focused workflow: when an inbound lead has sufficient submission data, a chatbot/automation flow should engage that lead within **5 minutes** so the lead stays hot.
 - Added `docs/product-brief.md` to define the product vision, problem, core value proposition, target users, MVP direction, and differentiators.
 - Added `docs/inbound-flow.md` to define the end-to-end hot inbound lead workflow: intake, normalization, sufficiency evaluation, rapid response, bot engagement, routing, handoff, and SLA/audit considerations.
+- Added `docs/mvp.md` to define the smallest buildable version of LeadSprint focused on organization support, inbound intake, rapid response, conversation continuity, and role-aware operation.
+- Added `docs/permissions.md` to define the first-pass role and permission model for Owner, Admin, General User, and Support User, including sensitive messaging controls.
