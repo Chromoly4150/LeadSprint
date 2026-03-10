@@ -1,0 +1,2 @@
+company_name,domain,contact_name,title,email,linkedin_url,company_linkedin,industry,employee_range,location,source_url,fit_reason,status,notes
+Example Co,example.com,Jane Doe,Founder,,https://www.linkedin.com/in/example/,https://www.linkedin.com/company/example/,SaaS,11-50,New York,https://example.com,demo row,sourced,
