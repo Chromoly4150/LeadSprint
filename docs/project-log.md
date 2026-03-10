@@ -16,3 +16,4 @@
 - Captured a key product promise: the system should both **generate leads** and **ingest leads from external sources** such as Google Forms or website submissions.
 - Captured a core conversion-focused workflow: when an inbound lead has sufficient submission data, a chatbot/automation flow should engage that lead within **5 minutes** so the lead stays hot.
 - Added `docs/product-brief.md` to define the product vision, problem, core value proposition, target users, MVP direction, and differentiators.
+- Added `docs/inbound-flow.md` to define the end-to-end hot inbound lead workflow: intake, normalization, sufficiency evaluation, rapid response, bot engagement, routing, handoff, and SLA/audit considerations.
