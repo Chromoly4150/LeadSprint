@@ -150,12 +150,24 @@ Quick actions might include:
 Show:
 - contact details
 - location/state
-- notes
 - intake summary
 - source metadata
 - tags
 
-### C. Activity / timeline panel
+### C. Internal notes panel
+Show:
+- org-only notes
+- note author
+- timestamps
+- pinned or recent notes
+- ability to add a general note
+- ability to attach a note to a specific call or communication item
+
+Important:
+- internal notes must never be shown to the lead/contact
+- visibility should respect org permissions
+
+### D. Activity / timeline panel
 Show chronological events such as:
 - lead received
 - automation triggered
@@ -165,17 +177,23 @@ Show chronological events such as:
 - user notes
 - follow-up actions
 
-### D. Conversation panel
+### E. Conversation panel
 This is important enough that it should be built into the lead detail experience from the start.
 
 Show:
-- thread/messages
+- full communication log
+- channel type (email, SMS, call, chat, etc.)
 - bot vs human message distinction
 - timestamps
+- most recent discussion context
 - takeover controls
 - send box if user has permission
 
-### E. Qualification / workflow panel
+For calls:
+- support a call entry in the communication history
+- allow a note or summary to be tied directly to the call record so context is not lost
+
+### F. Qualification / workflow panel
 Show:
 - required follow-up items
 - qualification fields

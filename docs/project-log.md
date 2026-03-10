@@ -27,3 +27,5 @@
 - Captured Reports direction around exports, printable views, and operational reporting.
 - Added `docs/technical-architecture.md` with a concrete modular-monolith stack proposal: Next.js, PostgreSQL, auth/authorization layering, Redis-backed jobs, provider adapters, and event/job-driven hot-lead handling.
 - Added `docs/ui-screens.md` with a concrete screen/layout proposal for Dashboard, Leads, Reports, and the embedded lead-detail conversation workflow.
+- Expanded the model/UI direction so each lead supports internal org-only notes and a full timestamped communication log.
+- Captured the need for privileged users to review recent communication context across email, SMS, and calls, with notes attachable directly to call records.

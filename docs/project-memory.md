@@ -85,6 +85,12 @@ The Dashboard should provide general overview metrics such as inbound leads over
 ### Leads direction
 The Leads tab should show a sortable/filterable lead list.
 
+Within each lead, there should be:
+- internal org-only notes
+- a full timestamped communication log
+- visibility into the most recent discussion context for channels like email or SMS
+- support for attaching notes to calls so call context is preserved
+
 Initial sort options include:
 - most recently received
 - most recently managed/edited

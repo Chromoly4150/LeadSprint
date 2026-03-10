@@ -133,10 +133,13 @@ Examples:
 - `campaigns.edit`
 - `campaigns.manage`
 
-### 5. Conversation and messaging permissions
+### 5. Conversation, notes, and messaging permissions
 Examples:
 - `conversations.view`
 - `conversations.takeover`
+- `notes.view_internal`
+- `notes.create_internal`
+- `notes.edit_internal`
 - `messaging.send_email`
 - `messaging.send_sms`
 - `messaging.send_other`

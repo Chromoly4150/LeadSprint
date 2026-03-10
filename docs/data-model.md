@@ -256,6 +256,7 @@ Channels may include:
 - SMS
 - email
 - chat/webchat
+- call
 - other integrated channels
 
 Fields:
@@ -269,12 +270,19 @@ Fields:
 - `direction` (`inbound`, `outbound`)
 - `senderType` (`user`, `system`, `bot`)
 - `senderId`
+- `subject` (nullable; useful for email)
 - `content`
+- `summary` (nullable; useful for previews and call summaries)
 - `status`
 - `sentAt`
 - `deliveredAt`
 - `readAt`
 - `createdAt`
+
+Notes:
+- users with sufficient permissions should be able to review communication history with timestamps
+- for text/email/chat channels, the system should preserve enough message detail to understand the most recent discussion
+- call interactions may store notes and/or summaries tied to the communication record
 
 ---
 
@@ -300,7 +308,37 @@ Purpose:
 
 ---
 
-## 12. Bot Engagement / Automation Run
+## 12. Internal Note
+
+Represents an internal note visible only to organization users with the right permissions.
+
+Purpose:
+- preserve operational context that should not be visible to the lead/contact
+- capture follow-up notes, strategy, reminders, and team coordination
+- attach notes to a lead generally or to a specific communication event such as a call
+
+Fields:
+- `id`
+- `organizationId`
+- `leadId`
+- `contactId` (nullable)
+- `conversationId` (nullable)
+- `messageId` (nullable; useful for tying a note to a specific email/text/call record)
+- `authorUserId`
+- `noteType` (`general`, `call_note`, `follow_up`, `internal_comment`, etc.)
+- `content`
+- `createdAt`
+- `updatedAt`
+
+Examples:
+- general internal lead note
+- note attached to a call interaction
+- note explaining recent email context
+- next-step reminder after a conversation
+
+---
+
+## 13. Bot Engagement / Automation Run
 
 Represents automated follow-up behavior.
 
@@ -328,7 +366,7 @@ Key concept:
 
 ---
 
-## 13. Integration
+## 14. Integration
 
 External system connection.
 
@@ -351,7 +389,7 @@ Fields:
 
 ---
 
-## 14. Audit Log
+## 15. Audit Log
 
 Records important user/system actions.
 
@@ -373,7 +411,7 @@ Important for:
 
 ---
 
-## 15. SLA / Response Policy
+## 16. SLA / Response Policy
 
 Defines time-sensitive behavior expectations.
 
@@ -405,6 +443,8 @@ Why this matters:
 - Lead may belong to a Campaign
 - Lead may have one or more Conversations
 - Conversation has many Messages
+- Lead may have many Internal Notes
+- Internal Notes may optionally attach to a Contact, Conversation, or specific Message/Call record
 - Lead may have one or more Bot Engagement runs
 - Users/Roles have Permissions
 - Audit Logs capture sensitive actions across all entities
