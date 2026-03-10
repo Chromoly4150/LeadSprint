@@ -42,3 +42,4 @@ LeadSprint/
 - Keep secrets in local `.env` files, not in git.
 - Put only safe sample data in the repo.
 - Treat real prospect exports as working data unless you explicitly want them versioned.
+- Use `docs/project-memory.md` and `docs/project-log.md` as the durable source of truth for product direction and key decisions.
