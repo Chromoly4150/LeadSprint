@@ -29,6 +29,9 @@ The product should not be designed only for solo operators. It should be able to
 ### Broader ambition
 Although mortgage is a strong starting wedge, the project may expand into a more general-purpose platform for rapid lead discovery, qualification, contact preparation, and outreach support.
 
+### Current selling point
+A major near-term selling point is that the app will not only generate leads, but also **ingest leads from any source** (for example Google Form submissions, website submissions, and similar intake channels). If the submission contains sufficient information, a chatbot/automation layer should engage the lead within **5 minutes** so the lead stays hot and conversion likelihood remains high.
+
 ## Working hypotheses
 - Start from a vertical where domain knowledge is strong.
 - Avoid overfitting the product to a single solo-user workflow.
