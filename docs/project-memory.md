@@ -35,8 +35,52 @@ Although mortgage is a strong starting wedge, the project may expand into a more
 - Design toward organization-level usage, approval, and repeatable processes.
 - Keep room for expansion beyond mortgage into other business categories.
 
+## Access model / tenant model
+
+### Organization-first design
+The platform should be designed so that **any company type** can use it, not just mortgage firms.
+
+### Core tenancy rule
+- Every account belongs to an **Organization**.
+- No Organization can exist without an **Owner**.
+- The Owner has full privileges over organizational settings.
+
+### Initial roles
+- **Owner**
+  - required for every organization
+  - full access to organization settings
+  - can add/remove users
+  - can configure permissions
+  - cannot be removed by admins
+- **Admin**
+  - broad organizational permissions similar to Owner
+  - can manage users/settings within allowed scope
+  - cannot remove or supersede the Owner
+- **General User**
+  - elevated permissions relative to Support User
+  - intended for normal day-to-day platform usage
+- **Support User**
+  - more limited baseline permissions
+  - intended for assisting with parts of the workflow
+  - should be configurable so it can approach General User capabilities where needed, while still allowing specific restrictions
+
+### Permission philosophy
+Permissions will be defined later, but role separation matters because organizations may want some users to help operate the system without allowing sensitive actions like messaging leads.
+
+Example permission areas:
+- user management
+- organization settings
+- lead/contact visibility
+- lead editing
+- campaign management
+- integrated messaging (SMS, email, other)
+- export/import actions
+- billing or subscription access
+- audit / reporting access
+
 ## Open questions
 - Is the first sellable version an internal service tool, customer-facing software, or hybrid?
 - What exact workflow is most valuable at the brokerage/team level?
 - What parts of contact/outreach should be automated vs human-reviewed?
 - What compliance/approval constraints matter for mortgage brokerages specifically?
+- Should permissions be strictly role-based, custom permission-based, or hybrid (roles + overrides)?
