@@ -34,3 +34,5 @@
 - Captured a UI-direction constraint that the interface should remain easy to adjust through reusable components, tokens, and modular layout structure.
 - Captured a future product direction around gamification/achievements to reinforce useful behaviors like fast follow-up, throughput, and consistent lead handling.
 - Added `docs/roadmap.md` as a business-facing roadmap summarizing the product vision, current progress, and proposed phased path forward for partner sharing.
+- Reinforced the project operating rule that the LeadSprint repo docs should act as the durable source of truth so future conversations do not lose project context.
+- Identified an older project folder at `~/Documents/lead gen` containing substantial prior materials (architecture, PRD, roadmap, positioning, integrations, sprint/taskboard docs) that should likely be reviewed/imported rather than left as stranded context.

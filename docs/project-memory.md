@@ -113,6 +113,30 @@ The Reports tab should support reporting workflows such as export to spreadsheet
 ### UI flexibility direction
 The UI should be built so it is easy to adjust later without needing a heavy redesign workflow. In practice, that means leaning on reusable components, shared design tokens, and layout primitives so screens can be rearranged/refined quickly.
 
+### Persistence / source-of-truth direction
+To avoid losing context in future conversations, the **LeadSprint repo itself** should be treated as the durable source of truth for this project.
+
+That means:
+- product decisions should be written into repo docs
+- `docs/project-memory.md` should hold ongoing durable project context
+- `docs/project-log.md` should record notable decisions/progress chronologically
+- duplicate planning files outside the repo should be avoided unless they are intentionally archived or clearly temporary
+
+### Known prior project materials
+There is an older project folder at `~/Documents/lead gen` that appears to contain substantial prior work, including docs such as:
+- `docs/ARCHITECTURE.md`
+- `docs/INTEGRATIONS.md`
+- `docs/MVP-SCOPE.md`
+- `docs/POSITIONING.md`
+- `docs/PRD.md`
+- `docs/ROADMAP.md`
+- `docs/SALES-ENABLEMENT.md`
+- `docs/SALES-SCRIPT-ONE-PAGER.md`
+- `docs/SPRINT-01.md`
+- `docs/TASKBOARD.md`
+
+This should likely be treated as historical source material to review/import into LeadSprint so important context is not lost.
+
 ### Gamification direction
 A future product feature should be **gamification** to make lead work more engaging and trackable.
 
