@@ -33,3 +33,4 @@
 - Scaffolded the initial Next.js application shell in the repo with a first-pass Dashboard / Leads / Reports UI and verified it builds successfully.
 - Captured a UI-direction constraint that the interface should remain easy to adjust through reusable components, tokens, and modular layout structure.
 - Captured a future product direction around gamification/achievements to reinforce useful behaviors like fast follow-up, throughput, and consistent lead handling.
+- Added `docs/roadmap.md` as a business-facing roadmap summarizing the product vision, current progress, and proposed phased path forward for partner sharing.
