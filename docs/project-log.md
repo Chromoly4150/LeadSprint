@@ -25,3 +25,5 @@
 - Captured Dashboard direction around overview metrics such as recent inbound leads and conversion metrics.
 - Captured Leads direction around sortable/filterable lead lists, including separation between lifecycle status and urgency/indicator status (such as Hot).
 - Captured Reports direction around exports, printable views, and operational reporting.
+- Added `docs/technical-architecture.md` with a concrete modular-monolith stack proposal: Next.js, PostgreSQL, auth/authorization layering, Redis-backed jobs, provider adapters, and event/job-driven hot-lead handling.
+- Added `docs/ui-screens.md` with a concrete screen/layout proposal for Dashboard, Leads, Reports, and the embedded lead-detail conversation workflow.
