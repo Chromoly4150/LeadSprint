@@ -110,6 +110,19 @@ This separation matters because urgency is not the same as workflow state.
 ### Reports direction
 The Reports tab should support reporting workflows such as export to spreadsheet, printable outputs, and other reporting needs to be refined later.
 
+### UI flexibility direction
+The UI should be built so it is easy to adjust later without needing a heavy redesign workflow. In practice, that means leaning on reusable components, shared design tokens, and layout primitives so screens can be rearranged/refined quickly.
+
+### Gamification direction
+A future product feature should be **gamification** to make lead work more engaging and trackable.
+
+Examples include:
+- achievements for getting a certain number of leads into the system
+- achievements for contacting leads within target response windows
+- progress/goal tracking tied to operational behaviors
+
+The purpose is not just novelty; it should reinforce valuable behaviors like speed-to-lead, consistency, and follow-up discipline.
+
 Example permission areas:
 - user management
 - organization settings
