@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { AppShell } from '@/components/app-shell';
 import { PermissionGuard } from '@/components/permission-guard';
+import { dispatchQueuedOutboundJobsAction } from '@/app/leads/actions';
 import { reportSummary, queuedOutboundJobs, recentInboundEvents } from '@/lib/db';
 
 export default function ReportsPage() {
@@ -19,6 +20,11 @@ export default function ReportsPage() {
         <div className="toolbar">
           <PermissionGuard permission="exports.run" fallback={<span className="pill">CSV export requires higher permission</span>}>
             <a href="/api/reports/leads" className="button-primary">Download leads CSV</a>
+          </PermissionGuard>
+          <PermissionGuard permission="conversations.takeover">
+            <form action={dispatchQueuedOutboundJobsAction}>
+              <button type="submit" className="button-secondary">Dispatch queued jobs</button>
+            </form>
           </PermissionGuard>
           <Link href="/leads" className="button-secondary">Open lead workspace</Link>
         </div>

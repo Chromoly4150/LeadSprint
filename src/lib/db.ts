@@ -146,6 +146,14 @@ export function initializeDatabase() {
       to_address TEXT NOT NULL,
       subject TEXT,
       body TEXT NOT NULL,
+      provider_message_id TEXT,
+      last_error_code TEXT,
+      last_error_message TEXT,
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      last_attempt_at TEXT,
+      sent_at TEXT,
+      failed_at TEXT,
+      payload_json TEXT,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
     CREATE TABLE IF NOT EXISTS permission_assignments (
@@ -181,6 +189,20 @@ export function initializeDatabase() {
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
   `);
+
+  const outboundColumns = sqlite.prepare("PRAGMA table_info(outbound_jobs)").all() as Array<{ name: string }>;
+  const names = new Set(outboundColumns.map((col) => col.name));
+  const addColumn = (name: string, ddl: string) => {
+    if (!names.has(name)) sqlite.exec(`ALTER TABLE outbound_jobs ADD COLUMN ${ddl}`);
+  };
+  addColumn('provider_message_id', 'provider_message_id TEXT');
+  addColumn('last_error_code', 'last_error_code TEXT');
+  addColumn('last_error_message', 'last_error_message TEXT');
+  addColumn('attempt_count', 'attempt_count INTEGER NOT NULL DEFAULT 0');
+  addColumn('last_attempt_at', 'last_attempt_at TEXT');
+  addColumn('sent_at', 'sent_at TEXT');
+  addColumn('failed_at', 'failed_at TEXT');
+  addColumn('payload_json', 'payload_json TEXT');
 }
 
 function seedIfEmpty() {
@@ -240,7 +262,7 @@ function seedIfEmpty() {
   ]).onConflictDoNothing().run();
 
   db.insert(outboundJobs).values([
-    { id: 'seed_job_001', leadId: 'lead_001', channel: 'Email', status: 'queued', provider: 'gmail', toAddress: 'taylor@brooksrealty.com', subject: 'Thanks for reaching out', body: 'We received your inquiry and will follow up shortly.' },
+    { id: 'seed_job_001', leadId: 'lead_001', channel: 'Email', status: 'queued', provider: 'gmail', toAddress: 'taylor@brooksrealty.com', subject: 'Thanks for reaching out', body: 'We received your inquiry and will follow up shortly.', attemptCount: 0, payloadJson: JSON.stringify({ template: 'first_response' }) },
   ]).onConflictDoNothing().run();
 
   db.insert(conversations).values([
@@ -391,7 +413,7 @@ export function createInboundLead(input: InboundLeadInput) {
     ]).run();
     if (decision.actionable) {
       const body = `Thanks for reaching out — we received your ${input.service?.toLowerCase() || 'inquiry'} and will follow up shortly. Reply here with the best callback time if you’d like.`;
-      db.insert(outboundJobs).values({ id: id('job'), leadId, channel: input.email ? 'Email' : 'SMS', status: 'queued', provider: input.email ? 'gmail' : 'sms-placeholder', toAddress: input.email?.trim() || input.phone?.trim() || 'unknown', subject: 'We received your inquiry', body, createdAt: now }).run();
+      db.insert(outboundJobs).values({ id: id('job'), leadId, channel: input.email ? 'Email' : 'SMS', status: 'queued', provider: input.email ? 'gmail' : 'sms-placeholder', toAddress: input.email?.trim() || input.phone?.trim() || 'unknown', subject: 'We received your inquiry', body, attemptCount: 0, payloadJson: JSON.stringify(input), createdAt: now }).run();
       db.insert(communications).values({ id: id('comm'), leadId, channel: input.email ? 'Email' : 'SMS', direction: 'Outbound', actorName: 'Bot', subject: input.email ? 'We received your inquiry' : null, summary: 'First-response draft queued for delivery.', content: body, createdAt: now }).run();
       db.insert(activities).values({ id: id('act'), leadId, type: 'first_response_queued', label: 'First response queued', detail: 'Automated first-response job created for provider dispatch.', createdAt: now }).run();
     } else {
@@ -552,23 +574,34 @@ export function getConversationThread(conversationId: string) {
   };
 }
 
-export function markOutboundJobSent(jobId: string) {
+export function getOutboundJob(jobId: string) {
+  return db.select().from(outboundJobs).where(eq(outboundJobs.id, jobId)).get() ?? null;
+}
+
+export function markOutboundJobProcessing(jobId: string) {
+  const now = iso();
+  const job = getOutboundJob(jobId);
+  if (!job) throw new Error('Outbound job not found');
+  db.update(outboundJobs).set({ status: 'processing', attemptCount: (job.attemptCount ?? 0) + 1, lastAttemptAt: now, lastErrorCode: null, lastErrorMessage: null }).where(eq(outboundJobs.id, jobId)).run();
+}
+
+export function markOutboundJobSent(jobId: string, providerMessageId?: string, detail?: string) {
   const job = db.select().from(outboundJobs).where(eq(outboundJobs.id, jobId)).get();
   if (!job) throw new Error('Outbound job not found');
   const now = iso();
   db.transaction(() => {
-    db.update(outboundJobs).set({ status: 'sent' }).where(eq(outboundJobs.id, jobId)).run();
-    db.insert(communications).values({ id: id('comm'), leadId: job.leadId, channel: job.channel, direction: 'Outbound', actorName: 'Dispatcher', subject: job.subject, summary: 'Queued outbound job marked sent by operator.', content: job.body, createdAt: now }).run();
+    db.update(outboundJobs).set({ status: 'sent', providerMessageId: providerMessageId ?? job.providerMessageId ?? null, sentAt: now, failedAt: null, lastErrorCode: null, lastErrorMessage: null }).where(eq(outboundJobs.id, jobId)).run();
+    db.insert(communications).values({ id: id('comm'), leadId: job.leadId, channel: job.channel, direction: 'Outbound', actorName: 'Dispatcher', subject: job.subject, summary: detail || 'Queued outbound job sent through provider boundary.', content: job.body, createdAt: now }).run();
     db.update(leads).set({ lastContactAt: now, lastActivityAt: now, updatedAt: now, lifecycle: 'Contacted' }).where(eq(leads.id, job.leadId)).run();
-    db.insert(activities).values({ id: id('act'), leadId: job.leadId, type: 'outbound_job_sent', label: 'Outbound sent', detail: `${job.channel} job was marked sent through the dispatch queue.`, createdAt: now }).run();
+    db.insert(activities).values({ id: id('act'), leadId: job.leadId, type: 'outbound_job_sent', label: 'Outbound sent', detail: `${job.channel} job was sent through ${job.provider}.`, createdAt: now }).run();
   });
 }
 
-export function markOutboundJobFailed(jobId: string, reason?: string) {
+export function markOutboundJobFailed(jobId: string, reason?: string, errorCode?: string) {
   const job = db.select().from(outboundJobs).where(eq(outboundJobs.id, jobId)).get();
   if (!job) throw new Error('Outbound job not found');
   const now = iso();
-  db.update(outboundJobs).set({ status: 'failed' }).where(eq(outboundJobs.id, jobId)).run();
+  db.update(outboundJobs).set({ status: 'failed', failedAt: now, lastErrorCode: errorCode ?? null, lastErrorMessage: reason?.trim() || `${job.channel} job requires manual intervention.` }).where(eq(outboundJobs.id, jobId)).run();
   db.update(leads).set({ urgency: 'Needs Attention', lastActivityAt: now, updatedAt: now }).where(eq(leads.id, job.leadId)).run();
   db.insert(activities).values({ id: id('act'), leadId: job.leadId, type: 'outbound_job_failed', label: 'Outbound failed', detail: reason?.trim() || `${job.channel} job requires manual intervention.`, createdAt: now }).run();
 }

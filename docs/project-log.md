@@ -24,6 +24,7 @@
 - Added CSV lead import via both the Leads workspace and `POST /api/import/leads`, including audit logging for bulk imports.
 - Added duplicate detection/hygiene shared across manual and CSV intake, matching on email, phone, and name+company, plus a dedicated duplicate-check endpoint at `POST /api/leads/duplicates`.
 - Added a first-pass inbox/conversation model with persisted conversation rows, an inbox list view, and per-thread pages grouped by lead + channel.
+- Added the first outbound provider boundary scaffold: richer outbound job delivery fields, provider interfaces/adapters, registry/dispatch modules, manual dispatch action, and `POST /api/outbound/dispatch`.
 
 ## 2026-03-10
 

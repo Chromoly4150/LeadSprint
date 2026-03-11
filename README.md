@@ -15,6 +15,7 @@ This repo now contains:
 - manual lead creation plus CSV import from the Leads workspace, with an API import endpoint at `POST /api/import/leads`
 - duplicate detection/hygiene across intake paths, with duplicate lookups exposed at `POST /api/leads/duplicates`
 - a first-pass inbox/conversation workspace with `/inbox` and `/inbox/[id]` thread views
+- an outbound provider boundary scaffold with dispatchable job metadata, provider adapters, and `POST /api/outbound/dispatch`
 - a reports/export path including live summaries and `GET /api/reports/leads` CSV export
 
 ## Getting started

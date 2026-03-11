@@ -89,6 +89,14 @@ export const outboundJobs = sqliteTable('outbound_jobs', {
   toAddress: text('to_address').notNull(),
   subject: text('subject'),
   body: text('body').notNull(),
+  providerMessageId: text('provider_message_id'),
+  lastErrorCode: text('last_error_code'),
+  lastErrorMessage: text('last_error_message'),
+  attemptCount: integer('attempt_count').notNull().default(0),
+  lastAttemptAt: text('last_attempt_at'),
+  sentAt: text('sent_at'),
+  failedAt: text('failed_at'),
+  payloadJson: text('payload_json'),
   createdAt: text('created_at').default(sql`CURRENT_TIMESTAMP`).notNull(),
 });
 

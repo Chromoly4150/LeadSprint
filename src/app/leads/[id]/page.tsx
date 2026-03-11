@@ -6,6 +6,7 @@ import { PermissionGuard } from '@/components/permission-guard';
 import { getLeadDetail, listAssignees, queuedOutboundJobs } from '@/lib/db';
 import {
   addLeadNoteAction,
+  dispatchOutboundJobAction,
   logManualContactAction,
   markOutboundFailedAction,
   markOutboundSentAction,
@@ -227,12 +228,18 @@ export default async function LeadDetailPage({ params }: { params: Promise<{ id:
                 <p><strong>To:</strong> {job.toAddress}</p>
                 {job.subject ? <p><strong>Subject:</strong> {job.subject}</p> : null}
                 <p className="muted">{job.body}</p>
+                <p className="muted small">Attempts: {job.attemptCount ?? 0}{job.lastErrorMessage ? ` · Last error: ${job.lastErrorMessage}` : ''}</p>
                 <PermissionGuard permission="conversations.takeover" fallback={<p className="muted">Your role cannot operate the dispatch queue.</p>}>
                   <div className="toolbar">
+                    <form action={dispatchOutboundJobAction}>
+                      <input type="hidden" name="jobId" value={job.id} />
+                      <input type="hidden" name="leadId" value={lead.id} />
+                      <button type="submit" className="button-primary">Dispatch now</button>
+                    </form>
                     <form action={markOutboundSentAction}>
                       <input type="hidden" name="jobId" value={job.id} />
                       <input type="hidden" name="leadId" value={lead.id} />
-                      <button type="submit" className="button-primary">Mark sent</button>
+                      <button type="submit" className="button-secondary">Mark sent</button>
                     </form>
                     <form action={markOutboundFailedAction} className="inline-form fail-inline">
                       <input type="hidden" name="jobId" value={job.id} />

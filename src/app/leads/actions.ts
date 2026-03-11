@@ -16,6 +16,7 @@ import {
   updateLeadLifecycle,
   writeAuditLog,
 } from '@/lib/db';
+import { dispatchOutboundJob, dispatchQueuedOutboundJobs } from '@/lib/outbound/dispatch';
 
 export async function createInboundLeadAction(formData: FormData) {
   const user = await getCurrentUser();
@@ -224,7 +225,7 @@ export async function markOutboundSentAction(formData: FormData) {
 
   const jobId = String(formData.get('jobId'));
   const leadId = String(formData.get('leadId'));
-  markOutboundJobSent(jobId);
+  markOutboundJobSent(jobId, undefined, 'Operator manually marked outbound job sent.');
   const lead = getLeadDetail(leadId);
   if (lead) {
     writeAuditLog({
@@ -241,6 +242,29 @@ export async function markOutboundSentAction(formData: FormData) {
   revalidatePath('/reports');
   revalidatePath('/leads');
   revalidatePath(`/leads/${leadId}`);
+}
+
+export async function dispatchOutboundJobAction(formData: FormData) {
+  const user = await getCurrentUser();
+  await requirePermission(user, 'conversations.takeover');
+  const jobId = String(formData.get('jobId'));
+  const leadId = String(formData.get('leadId'));
+  await dispatchOutboundJob(jobId, user);
+  revalidatePath('/dashboard');
+  revalidatePath('/reports');
+  revalidatePath('/leads');
+  revalidatePath('/inbox');
+  revalidatePath(`/leads/${leadId}`);
+}
+
+export async function dispatchQueuedOutboundJobsAction() {
+  const user = await getCurrentUser();
+  await requirePermission(user, 'conversations.takeover');
+  await dispatchQueuedOutboundJobs(user, 10);
+  revalidatePath('/dashboard');
+  revalidatePath('/reports');
+  revalidatePath('/leads');
+  revalidatePath('/inbox');
 }
 
 export async function markOutboundFailedAction(formData: FormData) {
