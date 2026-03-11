@@ -7,6 +7,7 @@ import {
   activities,
   auditLogs,
   communications,
+  conversations,
   inboundEvents,
   leads,
   notes,
@@ -168,6 +169,17 @@ export function initializeDatabase() {
       metadata_json TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
+    CREATE TABLE IF NOT EXISTS conversations (
+      id TEXT PRIMARY KEY,
+      organization_id TEXT NOT NULL REFERENCES organizations(id),
+      lead_id TEXT NOT NULL REFERENCES leads(id),
+      channel TEXT NOT NULL,
+      status TEXT NOT NULL,
+      assigned_user_id TEXT REFERENCES users(id),
+      last_message_at TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
   `);
 }
 
@@ -229,6 +241,12 @@ function seedIfEmpty() {
 
   db.insert(outboundJobs).values([
     { id: 'seed_job_001', leadId: 'lead_001', channel: 'Email', status: 'queued', provider: 'gmail', toAddress: 'taylor@brooksrealty.com', subject: 'Thanks for reaching out', body: 'We received your inquiry and will follow up shortly.' },
+  ]).onConflictDoNothing().run();
+
+  db.insert(conversations).values([
+    { id: 'conv_001', organizationId: orgId, leadId: 'lead_001', channel: 'Chat', status: 'Open', assignedUserId: null, lastMessageAt: plusMinutes(-1), createdAt: plusMinutes(-5), updatedAt: plusMinutes(-1) },
+    { id: 'conv_002', organizationId: orgId, leadId: 'lead_002', channel: 'SMS', status: 'Open', assignedUserId: 'user_ava', lastMessageAt: plusMinutes(-8), createdAt: plusMinutes(-42), updatedAt: plusMinutes(-8) },
+    { id: 'conv_003', organizationId: orgId, leadId: 'lead_003', channel: 'Email', status: 'Needs reply', assignedUserId: 'user_noah', lastMessageAt: plusMinutes(-60), createdAt: plusMinutes(-180), updatedAt: plusMinutes(-18) },
   ]).onConflictDoNothing().run();
 }
 
@@ -366,6 +384,7 @@ export function createInboundLead(input: InboundLeadInput) {
   db.transaction(() => {
     db.insert(leads).values({ id: leadId, organizationId: org.id, name: input.name, company: input.company?.trim() || 'Unknown company', source: input.source, service: input.service?.trim() || 'General inquiry', state: input.state?.trim() || 'Unknown', lifecycle: decision.lifecycle, urgency: decision.urgency, assigneeUserId: null, email: input.email?.trim() || 'unknown@example.com', phone: input.phone?.trim() || 'Unknown', receivedAt: now, lastContactAt: null, lastActivityAt: now, firstResponseDueAt: dueAt, inboundPayloadJson: JSON.stringify(input), createdAt: now, updatedAt: now }).run();
     db.insert(inboundEvents).values({ id: id('evt'), organizationId: org.id, source: input.source, actionable: decision.actionable, status: decision.actionable ? 'accepted' : 'review_required', leadId, payloadJson: JSON.stringify(input), createdAt: now }).run();
+    ensureConversationForLead(leadId, org.id, input.email ? 'Email' : input.phone ? 'SMS' : 'Chat', null);
     db.insert(activities).values([
       { id: id('act'), leadId, type: 'lead_received', label: 'Lead received', detail: `${input.source} submission normalized into LeadSprint.`, createdAt: now },
       { id: id('act'), leadId, type: 'sla_started', label: 'SLA window started', detail: `First-response window ends ${relativeTime(dueAt)}.`, createdAt: now },
@@ -467,6 +486,8 @@ export function addLeadNote(leadId: string, content: string, actor: { id: string
 
 export function logManualContact(leadId: string, channel: string, summary: string, content: string, actor: { name: string }) {
   const now = iso();
+  const lead = db.select().from(leads).where(eq(leads.id, leadId)).get();
+  if (lead) ensureConversationForLead(leadId, lead.organizationId, channel, lead.assigneeUserId);
   db.insert(communications).values({ id: id('comm'), leadId, channel, direction: 'Outbound', actorName: actor.name, summary, content, createdAt: now }).run();
   db.update(leads).set({ lastContactAt: now, lastActivityAt: now, updatedAt: now, lifecycle: 'Contacted' }).where(eq(leads.id, leadId)).run();
   db.insert(activities).values({ id: id('act'), leadId, type: 'manual_contact_logged', label: 'Manual contact logged', detail: `${channel} contact recorded in lead timeline by ${actor.name}.`, createdAt: now }).run();
@@ -478,6 +499,57 @@ export function recentInboundEvents() {
 
 export function queuedOutboundJobs() {
   return db.select().from(outboundJobs).where(eq(outboundJobs.status, 'queued')).orderBy(desc(outboundJobs.createdAt)).all();
+}
+
+function ensureConversationForLead(leadId: string, organizationId: string, channel: string, assignedUserId?: string | null) {
+  const existing = db.select().from(conversations).where(eq(conversations.leadId, leadId)).all().find((row) => row.channel === channel);
+  const now = iso();
+  if (existing) {
+    db.update(conversations).set({ lastMessageAt: now, updatedAt: now, assignedUserId: assignedUserId ?? existing.assignedUserId }).where(eq(conversations.id, existing.id)).run();
+    return existing.id;
+  }
+  const conversationId = id('conv');
+  db.insert(conversations).values({ id: conversationId, organizationId, leadId, channel, status: 'Open', assignedUserId: assignedUserId ?? null, lastMessageAt: now, createdAt: now, updatedAt: now }).run();
+  return conversationId;
+}
+
+export function conversationInbox() {
+  const rows = db.select({ conversation: conversations, lead: leads, assigneeName: users.name })
+    .from(conversations)
+    .innerJoin(leads, eq(conversations.leadId, leads.id))
+    .leftJoin(users, eq(conversations.assignedUserId, users.id))
+    .orderBy(desc(conversations.lastMessageAt))
+    .all();
+
+  return rows.map(({ conversation, lead, assigneeName }) => ({
+    ...conversation,
+    leadName: lead.name,
+    company: lead.company,
+    urgency: lead.urgency,
+    lifecycle: lead.lifecycle,
+    assigneeName: assigneeName ?? 'Unassigned',
+    lastMessageLabel: relativeTime(conversation.lastMessageAt),
+  }));
+}
+
+export function getConversationThread(conversationId: string) {
+  const row = db.select({ conversation: conversations, lead: leads, assigneeName: users.name })
+    .from(conversations)
+    .innerJoin(leads, eq(conversations.leadId, leads.id))
+    .leftJoin(users, eq(conversations.assignedUserId, users.id))
+    .where(eq(conversations.id, conversationId))
+    .get();
+  if (!row) return null;
+
+  const messages = db.select().from(communications).where(eq(communications.leadId, row.lead.id)).orderBy(desc(communications.createdAt)).all().filter((item) => item.channel === row.conversation.channel);
+
+  return {
+    ...row.conversation,
+    lead: row.lead,
+    assigneeName: row.assigneeName ?? 'Unassigned',
+    messages,
+    lastMessageLabel: relativeTime(row.conversation.lastMessageAt),
+  };
 }
 
 export function markOutboundJobSent(jobId: string) {

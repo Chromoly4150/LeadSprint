@@ -5,6 +5,7 @@ import { getCurrentUser } from '@/lib/permissions';
 const navItems = [
   { href: '/dashboard', label: 'Dashboard' },
   { href: '/leads', label: 'Leads' },
+  { href: '/inbox', label: 'Inbox' },
   { href: '/reports', label: 'Reports' },
   { href: '/settings', label: 'Settings' },
 ];

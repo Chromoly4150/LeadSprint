@@ -115,5 +115,17 @@ export const auditLogs = sqliteTable('audit_logs', {
   createdAt: text('created_at').default(sql`CURRENT_TIMESTAMP`).notNull(),
 });
 
+export const conversations = sqliteTable('conversations', {
+  id: text('id').primaryKey(),
+  organizationId: text('organization_id').notNull().references(() => organizations.id),
+  leadId: text('lead_id').notNull().references(() => leads.id),
+  channel: text('channel').notNull(),
+  status: text('status').notNull(),
+  assignedUserId: text('assigned_user_id').references(() => users.id),
+  lastMessageAt: text('last_message_at').notNull(),
+  createdAt: text('created_at').default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: text('updated_at').default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
 export type LeadRow = typeof leads.$inferSelect;
 export type UserRow = typeof users.$inferSelect;

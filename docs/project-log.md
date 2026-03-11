@@ -23,6 +23,7 @@
 - Added a true manual lead creation path in the Leads workspace for operator-entered records.
 - Added CSV lead import via both the Leads workspace and `POST /api/import/leads`, including audit logging for bulk imports.
 - Added duplicate detection/hygiene shared across manual and CSV intake, matching on email, phone, and name+company, plus a dedicated duplicate-check endpoint at `POST /api/leads/duplicates`.
+- Added a first-pass inbox/conversation model with persisted conversation rows, an inbox list view, and per-thread pages grouped by lead + channel.
 
 ## 2026-03-10
 
