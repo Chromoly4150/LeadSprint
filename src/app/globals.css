@@ -141,6 +141,16 @@ textarea { resize: vertical; }
   color: var(--text);
 }
 .small { font-size: 13px; }
+.sidebar-user {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.permission-chips {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
 code {
   background: rgba(255,255,255,0.06);
   padding: 2px 6px;

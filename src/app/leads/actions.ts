@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
+import { getCurrentUser, requirePermission } from '@/lib/permissions';
 import {
   addLeadNote,
   createInboundLead,
@@ -13,6 +14,9 @@ import {
 } from '@/lib/db';
 
 export async function createInboundLeadAction(formData: FormData) {
+  const user = getCurrentUser();
+  requirePermission(user, 'leads.create');
+
   const lead = createInboundLead({
     source: String(formData.get('source') || 'Manual Intake'),
     name: String(formData.get('name') || '').trim(),
@@ -31,6 +35,9 @@ export async function createInboundLeadAction(formData: FormData) {
 }
 
 export async function updateAssignmentAction(formData: FormData) {
+  const user = getCurrentUser();
+  requirePermission(user, 'leads.assign');
+
   const leadId = String(formData.get('leadId'));
   const assigneeUserId = String(formData.get('assigneeUserId') || '');
   updateLeadAssignment(leadId, assigneeUserId || null);
@@ -40,6 +47,9 @@ export async function updateAssignmentAction(formData: FormData) {
 }
 
 export async function updateLifecycleAction(formData: FormData) {
+  const user = getCurrentUser();
+  requirePermission(user, 'leads.edit');
+
   const leadId = String(formData.get('leadId'));
   const lifecycle = String(formData.get('lifecycle'));
   updateLeadLifecycle(leadId, lifecycle);
@@ -49,6 +59,9 @@ export async function updateLifecycleAction(formData: FormData) {
 }
 
 export async function addLeadNoteAction(formData: FormData) {
+  const user = getCurrentUser();
+  requirePermission(user, 'notes.create_internal');
+
   const leadId = String(formData.get('leadId'));
   const content = String(formData.get('content') || '').trim();
   if (!content) return;
@@ -59,8 +72,13 @@ export async function addLeadNoteAction(formData: FormData) {
 }
 
 export async function logManualContactAction(formData: FormData) {
-  const leadId = String(formData.get('leadId'));
+  const user = getCurrentUser();
   const channel = String(formData.get('channel') || 'Call');
+  if (channel === 'Email') requirePermission(user, 'messaging.send_email');
+  else if (channel === 'SMS') requirePermission(user, 'messaging.send_sms');
+  else requirePermission(user, 'messaging.send_other');
+
+  const leadId = String(formData.get('leadId'));
   const summary = String(formData.get('summary') || '').trim();
   const content = String(formData.get('content') || '').trim();
   if (!summary || !content) return;
@@ -71,6 +89,9 @@ export async function logManualContactAction(formData: FormData) {
 }
 
 export async function markOutboundSentAction(formData: FormData) {
+  const user = getCurrentUser();
+  requirePermission(user, 'conversations.takeover');
+
   const jobId = String(formData.get('jobId'));
   const leadId = String(formData.get('leadId'));
   markOutboundJobSent(jobId);
@@ -81,6 +102,9 @@ export async function markOutboundSentAction(formData: FormData) {
 }
 
 export async function markOutboundFailedAction(formData: FormData) {
+  const user = getCurrentUser();
+  requirePermission(user, 'conversations.takeover');
+
   const jobId = String(formData.get('jobId'));
   const leadId = String(formData.get('leadId'));
   const reason = String(formData.get('reason') || '').trim();

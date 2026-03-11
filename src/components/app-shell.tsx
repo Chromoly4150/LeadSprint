@@ -1,13 +1,17 @@
 import Link from 'next/link';
 import { ReactNode } from 'react';
+import { getCurrentUser } from '@/lib/permissions';
 
 const navItems = [
   { href: '/dashboard', label: 'Dashboard' },
   { href: '/leads', label: 'Leads' },
   { href: '/reports', label: 'Reports' },
+  { href: '/settings', label: 'Settings' },
 ];
 
 export function AppShell({ children, title, subtitle }: { children: ReactNode; title: string; subtitle?: string }) {
+  const currentUser = getCurrentUser();
+
   return (
     <main className="app-shell">
       <aside className="sidebar">
@@ -15,6 +19,7 @@ export function AppShell({ children, title, subtitle }: { children: ReactNode; t
           <p className="eyebrow">LeadSprint</p>
           <h1>{title}</h1>
           {subtitle ? <p className="muted">{subtitle}</p> : null}
+          <div className="sidebar-user muted small">Acting as: <strong>{currentUser.name}</strong> · {currentUser.role}</div>
         </div>
         <nav className="nav">
           {navItems.map((item) => (

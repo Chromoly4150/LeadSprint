@@ -16,6 +16,7 @@
 - Removed the now-obsolete `src/lib/mock-data.ts` scaffold because the app is now backed by the real SQLite data layer.
 - Added live lead filtering/search on the Leads screen (query, lifecycle, urgency, assignee).
 - Added an operator dispatch workflow for queued outbound jobs so jobs can be marked sent or failed from the lead detail screen and write back into communications/activity state.
+- Added a first-pass permission enforcement scaffold with role → capability mapping, server-side permission checks in server actions/API routes, a permission-aware settings page, and role-gated UI sections.
 
 ## 2026-03-10
 

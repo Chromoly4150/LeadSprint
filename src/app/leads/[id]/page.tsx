@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { AppShell } from '@/components/app-shell';
 import { Badge, toneForUrgency } from '@/components/badge';
+import { PermissionGuard } from '@/components/permission-guard';
 import { getLeadDetail, listAssignees, queuedOutboundJobs } from '@/lib/db';
 import {
   addLeadNoteAction,
@@ -68,60 +69,68 @@ export default async function LeadDetailPage({ params }: { params: Promise<{ id:
             </div>
           </div>
           <div className="stack form-stack compact-forms">
-            <form action={updateAssignmentAction} className="inline-form">
-              <input type="hidden" name="leadId" value={lead.id} />
-              <label>
-                <span>Assignee</span>
-                <select name="assigneeUserId" defaultValue={lead.assigneeUserId ?? ''}>
-                  <option value="">Unassigned</option>
-                  {assignees.map((user) => (
-                    <option key={user.id} value={user.id}>{user.name} · {user.role}</option>
-                  ))}
-                </select>
-              </label>
-              <button type="submit" className="button-secondary">Save assignment</button>
-            </form>
-
-            <form action={updateLifecycleAction} className="inline-form">
-              <input type="hidden" name="leadId" value={lead.id} />
-              <label>
-                <span>Lifecycle</span>
-                <select name="lifecycle" defaultValue={lead.lifecycle}>
-                  {lifecycleOptions.map((option) => <option key={option} value={option}>{option}</option>)}
-                </select>
-              </label>
-              <button type="submit" className="button-secondary">Update lifecycle</button>
-            </form>
-
-            <form action={addLeadNoteAction} className="stack">
-              <input type="hidden" name="leadId" value={lead.id} />
-              <label>
-                <span>Internal note</span>
-                <textarea name="content" rows={4} placeholder="Add internal context, call prep, or handoff notes." />
-              </label>
-              <button type="submit" className="button-secondary">Add note</button>
-            </form>
-
-            <form action={logManualContactAction} className="stack">
-              <input type="hidden" name="leadId" value={lead.id} />
-              <div className="field-grid">
+            <PermissionGuard permission="leads.assign" fallback={<p className="muted">Your role cannot assign leads.</p>}>
+              <form action={updateAssignmentAction} className="inline-form">
+                <input type="hidden" name="leadId" value={lead.id} />
                 <label>
-                  <span>Channel</span>
-                  <select name="channel" defaultValue="Call">
-                    {channelOptions.map((option) => <option key={option}>{option}</option>)}
+                  <span>Assignee</span>
+                  <select name="assigneeUserId" defaultValue={lead.assigneeUserId ?? ''}>
+                    <option value="">Unassigned</option>
+                    {assignees.map((user) => (
+                      <option key={user.id} value={user.id}>{user.name} · {user.role}</option>
+                    ))}
                   </select>
                 </label>
+                <button type="submit" className="button-secondary">Save assignment</button>
+              </form>
+            </PermissionGuard>
+
+            <PermissionGuard permission="leads.edit" fallback={<p className="muted">Your role cannot change lifecycle state.</p>}>
+              <form action={updateLifecycleAction} className="inline-form">
+                <input type="hidden" name="leadId" value={lead.id} />
                 <label>
-                  <span>Summary</span>
-                  <input name="summary" placeholder="Left voicemail and texted callback window." />
+                  <span>Lifecycle</span>
+                  <select name="lifecycle" defaultValue={lead.lifecycle}>
+                    {lifecycleOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+                  </select>
                 </label>
-              </div>
-              <label>
-                <span>Detail</span>
-                <textarea name="content" rows={4} placeholder="What happened, what the lead asked for, and next step." />
-              </label>
-              <button type="submit" className="button-primary">Log manual contact</button>
-            </form>
+                <button type="submit" className="button-secondary">Update lifecycle</button>
+              </form>
+            </PermissionGuard>
+
+            <PermissionGuard permission="notes.create_internal" fallback={<p className="muted">Your role cannot write internal notes.</p>}>
+              <form action={addLeadNoteAction} className="stack">
+                <input type="hidden" name="leadId" value={lead.id} />
+                <label>
+                  <span>Internal note</span>
+                  <textarea name="content" rows={4} placeholder="Add internal context, call prep, or handoff notes." />
+                </label>
+                <button type="submit" className="button-secondary">Add note</button>
+              </form>
+            </PermissionGuard>
+
+            <PermissionGuard permission="messaging.send_other" fallback={<p className="muted">Your role cannot log outbound contact actions.</p>}>
+              <form action={logManualContactAction} className="stack">
+                <input type="hidden" name="leadId" value={lead.id} />
+                <div className="field-grid">
+                  <label>
+                    <span>Channel</span>
+                    <select name="channel" defaultValue="Call">
+                      {channelOptions.map((option) => <option key={option}>{option}</option>)}
+                    </select>
+                  </label>
+                  <label>
+                    <span>Summary</span>
+                    <input name="summary" placeholder="Left voicemail and texted callback window." />
+                  </label>
+                </div>
+                <label>
+                  <span>Detail</span>
+                  <textarea name="content" rows={4} placeholder="What happened, what the lead asked for, and next step." />
+                </label>
+                <button type="submit" className="button-primary">Log manual contact</button>
+              </form>
+            </PermissionGuard>
           </div>
         </article>
       </section>
@@ -218,19 +227,21 @@ export default async function LeadDetailPage({ params }: { params: Promise<{ id:
                 <p><strong>To:</strong> {job.toAddress}</p>
                 {job.subject ? <p><strong>Subject:</strong> {job.subject}</p> : null}
                 <p className="muted">{job.body}</p>
-                <div className="toolbar">
-                  <form action={markOutboundSentAction}>
-                    <input type="hidden" name="jobId" value={job.id} />
-                    <input type="hidden" name="leadId" value={lead.id} />
-                    <button type="submit" className="button-primary">Mark sent</button>
-                  </form>
-                  <form action={markOutboundFailedAction} className="inline-form fail-inline">
-                    <input type="hidden" name="jobId" value={job.id} />
-                    <input type="hidden" name="leadId" value={lead.id} />
-                    <input name="reason" placeholder="Failure reason / manual follow-up note" />
-                    <button type="submit" className="button-secondary">Mark failed</button>
-                  </form>
-                </div>
+                <PermissionGuard permission="conversations.takeover" fallback={<p className="muted">Your role cannot operate the dispatch queue.</p>}>
+                  <div className="toolbar">
+                    <form action={markOutboundSentAction}>
+                      <input type="hidden" name="jobId" value={job.id} />
+                      <input type="hidden" name="leadId" value={lead.id} />
+                      <button type="submit" className="button-primary">Mark sent</button>
+                    </form>
+                    <form action={markOutboundFailedAction} className="inline-form fail-inline">
+                      <input type="hidden" name="jobId" value={job.id} />
+                      <input type="hidden" name="leadId" value={lead.id} />
+                      <input name="reason" placeholder="Failure reason / manual follow-up note" />
+                      <button type="submit" className="button-secondary">Mark failed</button>
+                    </form>
+                  </div>
+                </PermissionGuard>
               </div>
             )) : <p className="muted">No queued outbound jobs for this lead.</p>}
           </div>

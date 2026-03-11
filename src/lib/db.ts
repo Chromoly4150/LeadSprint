@@ -14,6 +14,7 @@ import {
   users,
   type LeadRow,
 } from '@/lib/schema';
+import { getCurrentUser } from '@/lib/permissions';
 
 const dataDir = path.join(process.cwd(), 'data');
 const dbPath = path.join(dataDir, 'leadsprint.sqlite');
@@ -403,16 +404,18 @@ export function updateLeadLifecycle(leadId: string, lifecycle: LeadRow['lifecycl
 
 export function addLeadNote(leadId: string, content: string) {
   const now = iso();
-  db.insert(notes).values({ id: id('note'), leadId, authorUserId: 'user_owner', authorName: 'Josiah', type: 'internal_comment', content, createdAt: now }).run();
+  const actor = getCurrentUser();
+  db.insert(notes).values({ id: id('note'), leadId, authorUserId: actor.id, authorName: actor.name, type: 'internal_comment', content, createdAt: now }).run();
   db.update(leads).set({ lastActivityAt: now, updatedAt: now }).where(eq(leads.id, leadId)).run();
-  db.insert(activities).values({ id: id('act'), leadId, type: 'note_added', label: 'Internal note added', detail: 'A team member added internal context to the lead.', createdAt: now }).run();
+  db.insert(activities).values({ id: id('act'), leadId, type: 'note_added', label: 'Internal note added', detail: `${actor.name} added internal context to the lead.`, createdAt: now }).run();
 }
 
 export function logManualContact(leadId: string, channel: string, summary: string, content: string) {
   const now = iso();
-  db.insert(communications).values({ id: id('comm'), leadId, channel, direction: 'Outbound', actorName: 'Josiah', summary, content, createdAt: now }).run();
+  const actor = getCurrentUser();
+  db.insert(communications).values({ id: id('comm'), leadId, channel, direction: 'Outbound', actorName: actor.name, summary, content, createdAt: now }).run();
   db.update(leads).set({ lastContactAt: now, lastActivityAt: now, updatedAt: now, lifecycle: 'Contacted' }).where(eq(leads.id, leadId)).run();
-  db.insert(activities).values({ id: id('act'), leadId, type: 'manual_contact_logged', label: 'Manual contact logged', detail: `${channel} contact recorded in lead timeline.`, createdAt: now }).run();
+  db.insert(activities).values({ id: id('act'), leadId, type: 'manual_contact_logged', label: 'Manual contact logged', detail: `${channel} contact recorded in lead timeline by ${actor.name}.`, createdAt: now }).run();
 }
 
 export function recentInboundEvents() {

@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { AppShell } from '@/components/app-shell';
 import { Badge, toneForUrgency } from '@/components/badge';
+import { PermissionGuard } from '@/components/permission-guard';
 import { listAssignees, listLeads } from '@/lib/db';
 import { createInboundLeadAction } from '@/app/leads/actions';
 
@@ -36,54 +37,59 @@ export default async function LeadsPage({
               <h3>Create a live inbound lead</h3>
             </div>
           </div>
-          <form action={createInboundLeadAction} className="stack form-stack">
-            <div className="field-grid">
-              <label>
-                <span>Source</span>
-                <select name="source" defaultValue="Website Form">
-                  <option>Website Form</option>
-                  <option>Google Form</option>
-                  <option>Webhook</option>
-                  <option>Manual Intake</option>
-                </select>
-              </label>
-              <label>
-                <span>Name</span>
-                <input name="name" placeholder="Alex Carter" required />
-              </label>
-            </div>
-            <div className="field-grid">
-              <label>
-                <span>Company</span>
-                <input name="company" placeholder="Carter Lending" />
-              </label>
-              <label>
-                <span>Service</span>
-                <input name="service" placeholder="Purchase loan follow-up" />
-              </label>
-            </div>
-            <div className="field-grid">
-              <label>
-                <span>Email</span>
-                <input name="email" type="email" placeholder="alex@example.com" />
-              </label>
-              <label>
-                <span>Phone</span>
-                <input name="phone" placeholder="(555) 000-0000" />
-              </label>
-            </div>
-            <div className="field-grid">
-              <label>
-                <span>State</span>
-                <input name="state" placeholder="FL" />
-              </label>
-              <label>
-                <span>Details</span>
-                <input name="details" placeholder="Needs callback this afternoon" />
-              </label>
-            </div>
-            <button type="submit" className="button-primary">Create lead + SLA + queued first response</button>
-          </form>
+          <PermissionGuard
+            permission="leads.create"
+            fallback={<p className="muted">Your current role cannot create inbound leads.</p>}
+          >
+            <form action={createInboundLeadAction} className="stack form-stack">
+              <div className="field-grid">
+                <label>
+                  <span>Source</span>
+                  <select name="source" defaultValue="Website Form">
+                    <option>Website Form</option>
+                    <option>Google Form</option>
+                    <option>Webhook</option>
+                    <option>Manual Intake</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Name</span>
+                  <input name="name" placeholder="Alex Carter" required />
+                </label>
+              </div>
+              <div className="field-grid">
+                <label>
+                  <span>Company</span>
+                  <input name="company" placeholder="Carter Lending" />
+                </label>
+                <label>
+                  <span>Service</span>
+                  <input name="service" placeholder="Purchase loan follow-up" />
+                </label>
+              </div>
+              <div className="field-grid">
+                <label>
+                  <span>Email</span>
+                  <input name="email" type="email" placeholder="alex@example.com" />
+                </label>
+                <label>
+                  <span>Phone</span>
+                  <input name="phone" placeholder="(555) 000-0000" />
+                </label>
+              </div>
+              <div className="field-grid">
+                <label>
+                  <span>State</span>
+                  <input name="state" placeholder="FL" />
+                </label>
+                <label>
+                  <span>Details</span>
+                  <input name="details" placeholder="Needs callback this afternoon" />
+                </label>
+              </div>
+              <button type="submit" className="button-primary">Create lead + SLA + queued first response</button>
+            </form>
+          </PermissionGuard>
         </article>
 
         <article className="card">

@@ -1,7 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createInboundLead } from '@/lib/db';
+import { getCurrentUser, hasPermission } from '@/lib/permissions';
 
 export async function POST(request: NextRequest) {
+  const user = getCurrentUser();
+  if (!hasPermission(user, 'leads.create')) {
+    return NextResponse.json({ error: `${user.role} cannot create inbound leads.` }, { status: 403 });
+  }
+
   const body = await request.json().catch(() => null);
 
   if (!body || typeof body !== 'object' || !('name' in body) || !('source' in body)) {

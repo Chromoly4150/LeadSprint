@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { AppShell } from '@/components/app-shell';
+import { PermissionGuard } from '@/components/permission-guard';
 import { reportSummary, queuedOutboundJobs, recentInboundEvents } from '@/lib/db';
 
 export default function ReportsPage() {
@@ -16,7 +17,9 @@ export default function ReportsPage() {
           <p className="muted">Start with exportable operational truth before more advanced analytics.</p>
         </div>
         <div className="toolbar">
-          <a href="/api/reports/leads" className="button-primary">Download leads CSV</a>
+          <PermissionGuard permission="exports.run" fallback={<span className="pill">CSV export requires higher permission</span>}>
+            <a href="/api/reports/leads" className="button-primary">Download leads CSV</a>
+          </PermissionGuard>
           <Link href="/leads" className="button-secondary">Open lead workspace</Link>
         </div>
       </header>
