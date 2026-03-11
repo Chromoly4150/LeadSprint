@@ -163,7 +163,7 @@ export default async function LeadsPage({
                   placeholder={"name,company,email,phone,state,service,details,source\nJamie Rivera,Rivera Insurance,jamie@example.com,(555) 111-2222,NC,Referral setup,Needs follow-up this afternoon,CSV Import"}
                 />
               </label>
-              <p className="muted small">Expected headers: name, company, email, phone, state, service, details, source. Missing name rows are skipped.</p>
+              <p className="muted small">Expected headers: name, company, email, phone, state, service, details, source. Missing name rows and detected duplicates are skipped.</p>
               <button type="submit" className="button-secondary">Import CSV leads</button>
             </form>
           </PermissionGuard>

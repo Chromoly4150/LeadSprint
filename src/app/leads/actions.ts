@@ -6,7 +6,7 @@ import { getCurrentUser, requirePermission } from '@/lib/permissions';
 import {
   addLeadNote,
   createInboundLead,
-  createManualLead,
+  createLeadIfNotDuplicate,
   getLeadDetail,
   importLeadsFromCsv,
   logManualContact,
@@ -62,7 +62,20 @@ export async function createManualLeadAction(formData: FormData) {
     service: String(formData.get('service') || '').trim(),
     details: String(formData.get('details') || '').trim(),
   };
-  const lead = createManualLead(payload);
+  const result = createLeadIfNotDuplicate(payload, 'manual');
+  if (!result.created) {
+    writeAuditLog({
+      organizationId: 'org_demo',
+      actorId: user.id,
+      actorName: user.name,
+      action: 'lead.manual_duplicate_blocked',
+      targetType: 'lead',
+      targetId: result.duplicate.matches[0]?.leadId ?? 'duplicate',
+      metadata: { reason: result.duplicate.reason, matches: result.duplicate.matches.map((m) => ({ leadId: m.leadId, matchedOn: m.matchedOn })) },
+    });
+    return;
+  }
+  const lead = result.lead;
   writeAuditLog({
     organizationId: lead.organizationId,
     actorId: user.id,

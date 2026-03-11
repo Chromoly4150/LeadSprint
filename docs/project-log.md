@@ -22,6 +22,7 @@
 - Added persisted audit logging (`audit_logs`) and now record sensitive lead workflow, dispatch, session switching, and permission override actions.
 - Added a true manual lead creation path in the Leads workspace for operator-entered records.
 - Added CSV lead import via both the Leads workspace and `POST /api/import/leads`, including audit logging for bulk imports.
+- Added duplicate detection/hygiene shared across manual and CSV intake, matching on email, phone, and name+company, plus a dedicated duplicate-check endpoint at `POST /api/leads/duplicates`.
 
 ## 2026-03-10
 

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
-import { count, desc, eq, sql } from 'drizzle-orm';
+import { count, desc, eq } from 'drizzle-orm';
 import {
   activities,
   auditLogs,
@@ -38,6 +38,14 @@ function iso(input?: string | Date | null) {
 
 function plusMinutes(minutes: number) {
   return new Date(Date.now() + minutes * 60_000).toISOString();
+}
+
+function normalizePhone(phone?: string | null) {
+  return String(phone ?? '').replace(/\D/g, '');
+}
+
+function comparable(value?: string | null) {
+  return String(value ?? '').trim().toLowerCase();
 }
 
 function relativeTime(isoString?: string | null) {
@@ -231,34 +239,8 @@ export function listAssignees() {
   return db.select().from(users).orderBy(users.name).all();
 }
 
-export function writeAuditLog({
-  organizationId,
-  actorId,
-  actorName,
-  action,
-  targetType,
-  targetId,
-  metadata,
-}: {
-  organizationId: string;
-  actorId: string;
-  actorName: string;
-  action: string;
-  targetType: string;
-  targetId: string;
-  metadata?: Record<string, unknown>;
-}) {
-  db.insert(auditLogs).values({
-    id: id('audit'),
-    organizationId,
-    actorType: 'user',
-    actorId,
-    actorName,
-    action,
-    targetType,
-    targetId,
-    metadataJson: JSON.stringify(metadata ?? {}),
-  }).run();
+export function writeAuditLog({ organizationId, actorId, actorName, action, targetType, targetId, metadata, }: { organizationId: string; actorId: string; actorName: string; action: string; targetType: string; targetId: string; metadata?: Record<string, unknown>; }) {
+  db.insert(auditLogs).values({ id: id('audit'), organizationId, actorType: 'user', actorId, actorName, action, targetType, targetId, metadataJson: JSON.stringify(metadata ?? {}), }).run();
 }
 
 export function listAuditLogs(limit = 50) {
@@ -274,72 +256,26 @@ export function listPermissionOverrides(userId?: string) {
   return userId ? query.where(eq(permissionAssignments.subjectId, userId)).all() : query.all();
 }
 
-export function setPermissionOverride({
-  organizationId,
-  userId,
-  permissionKey,
-  effect,
-}: {
-  organizationId: string;
-  userId: string;
-  permissionKey: string;
-  effect: 'allow' | 'deny';
-}) {
-  const existing = db.select().from(permissionAssignments)
-    .where(eq(permissionAssignments.subjectId, userId))
-    .all()
-    .find((row) => row.permissionKey === permissionKey);
-
+export function setPermissionOverride({ organizationId, userId, permissionKey, effect, }: { organizationId: string; userId: string; permissionKey: string; effect: 'allow' | 'deny'; }) {
+  const existing = db.select().from(permissionAssignments).where(eq(permissionAssignments.subjectId, userId)).all().find((row) => row.permissionKey === permissionKey);
   if (existing) {
-    db.update(permissionAssignments)
-      .set({ effect })
-      .where(eq(permissionAssignments.id, existing.id))
-      .run();
+    db.update(permissionAssignments).set({ effect }).where(eq(permissionAssignments.id, existing.id)).run();
     return;
   }
-
-  db.insert(permissionAssignments).values({
-    id: id('perm'),
-    organizationId,
-    subjectType: 'user',
-    subjectId: userId,
-    permissionKey,
-    effect,
-  }).run();
+  db.insert(permissionAssignments).values({ id: id('perm'), organizationId, subjectType: 'user', subjectId: userId, permissionKey, effect, }).run();
 }
 
 export function clearPermissionOverride(userId: string, permissionKey: string) {
-  const existing = db.select().from(permissionAssignments)
-    .where(eq(permissionAssignments.subjectId, userId))
-    .all()
-    .find((row) => row.permissionKey === permissionKey);
-
+  const existing = db.select().from(permissionAssignments).where(eq(permissionAssignments.subjectId, userId)).all().find((row) => row.permissionKey === permissionKey);
   if (!existing) return;
   db.delete(permissionAssignments).where(eq(permissionAssignments.id, existing.id)).run();
 }
 
-export type LeadFilters = {
-  query?: string;
-  lifecycle?: string;
-  urgency?: string;
-  assignee?: string;
-};
+export type LeadFilters = { query?: string; lifecycle?: string; urgency?: string; assignee?: string; };
 
 export function listLeads(filters?: LeadFilters) {
-  const rows = db.select({ lead: leads, assigneeName: users.name })
-    .from(leads)
-    .leftJoin(users, eq(leads.assigneeUserId, users.id))
-    .orderBy(desc(leads.receivedAt))
-    .all();
-
-  const normalized = rows.map(({ lead, assigneeName }) => ({
-    ...lead,
-    assigneeName: assigneeName ?? 'Unassigned',
-    receivedLabel: relativeTime(lead.receivedAt),
-    lastContactLabel: relativeTime(lead.lastContactAt),
-    lastActivityLabel: relativeTime(lead.lastActivityAt),
-  }));
-
+  const rows = db.select({ lead: leads, assigneeName: users.name }).from(leads).leftJoin(users, eq(leads.assigneeUserId, users.id)).orderBy(desc(leads.receivedAt)).all();
+  const normalized = rows.map(({ lead, assigneeName }) => ({ ...lead, assigneeName: assigneeName ?? 'Unassigned', receivedLabel: relativeTime(lead.receivedAt), lastContactLabel: relativeTime(lead.lastContactAt), lastActivityLabel: relativeTime(lead.lastActivityAt) }));
   return normalized.filter((lead) => {
     const query = filters?.query?.trim().toLowerCase();
     if (query) {
@@ -354,34 +290,17 @@ export function listLeads(filters?: LeadFilters) {
 }
 
 export function getLeadDetail(leadId: string) {
-  const row = db.select({ lead: leads, assigneeName: users.name })
-    .from(leads)
-    .leftJoin(users, eq(leads.assigneeUserId, users.id))
-    .where(eq(leads.id, leadId))
-    .get();
+  const row = db.select({ lead: leads, assigneeName: users.name }).from(leads).leftJoin(users, eq(leads.assigneeUserId, users.id)).where(eq(leads.id, leadId)).get();
   if (!row) return null;
-
   const leadNotes = db.select().from(notes).where(eq(notes.leadId, leadId)).orderBy(desc(notes.createdAt)).all();
   const leadComms = db.select().from(communications).where(eq(communications.leadId, leadId)).orderBy(desc(communications.createdAt)).all();
   const leadActivities = db.select().from(activities).where(eq(activities.leadId, leadId)).orderBy(desc(activities.createdAt)).all();
-
   const timeline = [
     ...leadActivities.map((item) => ({ kind: 'activity' as const, createdAt: item.createdAt, title: item.label, subtitle: item.type.replace(/_/g, ' '), body: item.detail })),
     ...leadNotes.map((item) => ({ kind: 'note' as const, createdAt: item.createdAt, title: item.authorName, subtitle: item.type.replace(/_/g, ' '), body: item.content })),
     ...leadComms.map((item) => ({ kind: 'communication' as const, createdAt: item.createdAt, title: `${item.direction} ${item.channel}`, subtitle: item.actorName, body: item.summary })),
   ].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-
-  return {
-    ...row.lead,
-    assigneeName: row.assigneeName ?? 'Unassigned',
-    receivedLabel: relativeTime(row.lead.receivedAt),
-    lastContactLabel: relativeTime(row.lead.lastContactAt),
-    lastActivityLabel: relativeTime(row.lead.lastActivityAt),
-    notes: leadNotes,
-    communications: leadComms,
-    activities: leadActivities,
-    timeline,
-  };
+  return { ...row.lead, assigneeName: row.assigneeName ?? 'Unassigned', receivedLabel: relativeTime(row.lead.receivedAt), lastContactLabel: relativeTime(row.lead.lastContactAt), lastActivityLabel: relativeTime(row.lead.lastActivityAt), notes: leadNotes, communications: leadComms, activities: leadActivities, timeline };
 }
 
 export function dashboardMetrics() {
@@ -391,129 +310,92 @@ export function dashboardMetrics() {
   const needsAction = leadRows.filter((lead) => ['New', 'Needs Attention'].includes(lead.urgency) || lead.lifecycle === 'New').length;
   const slaRisk = leadRows.filter((lead) => lead.urgency === 'SLA Risk').length;
   const contacted = leadRows.filter((lead) => !!lead.lastContactAt).length;
-  const avgResponseMinutes = contacted
-    ? Math.round(leadRows.filter((lead) => lead.lastContactAt).reduce((sum, lead) => sum + ((new Date(lead.lastContactAt!).getTime() - new Date(lead.receivedAt).getTime()) / 60000), 0) / contacted)
-    : 0;
+  const avgResponseMinutes = contacted ? Math.round(leadRows.filter((lead) => lead.lastContactAt).reduce((sum, lead) => sum + ((new Date(lead.lastContactAt!).getTime() - new Date(lead.receivedAt).getTime()) / 60000), 0) / contacted) : 0;
   return { total, hot, needsAction, slaRisk, avgResponseMinutes };
 }
 
-export type InboundLeadInput = {
-  source: string;
+export type InboundLeadInput = { source: string; name: string; company?: string; email?: string; phone?: string; state?: string; service?: string; details?: string; };
+export type ImportedLeadRow = InboundLeadInput & { rowNumber: number; };
+
+export type DuplicateMatch = {
+  leadId: string;
   name: string;
-  company?: string;
-  email?: string;
-  phone?: string;
-  state?: string;
-  service?: string;
-  details?: string;
+  company: string;
+  matchedOn: ('email' | 'phone' | 'name_company')[];
+  email: string;
+  phone: string;
+  lifecycle: string;
 };
 
-export type ImportedLeadRow = InboundLeadInput & {
-  rowNumber: number;
+export type DuplicateCheckResult = {
+  isDuplicate: boolean;
+  matches: DuplicateMatch[];
+  reason: string | null;
 };
 
 function leadUrgency(input: InboundLeadInput) {
   const actionable = Boolean(input.name && (input.email || input.phone) && input.details);
-  return {
-    actionable,
-    urgency: actionable ? 'Hot' : 'Needs Attention',
-    lifecycle: 'New',
-  };
+  return { actionable, urgency: actionable ? 'Hot' : 'Needs Attention', lifecycle: 'New' };
+}
+
+export function findDuplicateLeads(input: Pick<InboundLeadInput, 'name' | 'company' | 'email' | 'phone'>): DuplicateCheckResult {
+  const email = comparable(input.email);
+  const phone = normalizePhone(input.phone);
+  const name = comparable(input.name);
+  const company = comparable(input.company);
+  const rows = db.select().from(leads).all();
+  const matches = rows.flatMap((lead) => {
+    const matchedOn: DuplicateMatch['matchedOn'] = [];
+    if (email && comparable(lead.email) === email) matchedOn.push('email');
+    if (phone && normalizePhone(lead.phone) === phone) matchedOn.push('phone');
+    if (name && company && comparable(lead.name) === name && comparable(lead.company) === company) matchedOn.push('name_company');
+    if (!matchedOn.length) return [];
+    return [{ leadId: lead.id, name: lead.name, company: lead.company, matchedOn, email: lead.email, phone: lead.phone, lifecycle: lead.lifecycle }];
+  });
+  const reason = matches.length ? `Matched existing lead by ${matches[0].matchedOn.join(', ')}.` : null;
+  return { isDuplicate: matches.length > 0, matches, reason };
 }
 
 export function createInboundLead(input: InboundLeadInput) {
   const org = db.select().from(organizations).get();
   if (!org) throw new Error('No organization configured');
-
   const decision = leadUrgency(input);
   const leadId = id('lead');
   const now = iso();
   const dueAt = plusMinutes(5);
-
   db.transaction(() => {
-    db.insert(leads).values({
-      id: leadId,
-      organizationId: org.id,
-      name: input.name,
-      company: input.company?.trim() || 'Unknown company',
-      source: input.source,
-      service: input.service?.trim() || 'General inquiry',
-      state: input.state?.trim() || 'Unknown',
-      lifecycle: decision.lifecycle,
-      urgency: decision.urgency,
-      assigneeUserId: null,
-      email: input.email?.trim() || 'unknown@example.com',
-      phone: input.phone?.trim() || 'Unknown',
-      receivedAt: now,
-      lastContactAt: null,
-      lastActivityAt: now,
-      firstResponseDueAt: dueAt,
-      inboundPayloadJson: JSON.stringify(input),
-      createdAt: now,
-      updatedAt: now,
-    }).run();
-
-    db.insert(inboundEvents).values({
-      id: id('evt'),
-      organizationId: org.id,
-      source: input.source,
-      actionable: decision.actionable,
-      status: decision.actionable ? 'accepted' : 'review_required',
-      leadId,
-      payloadJson: JSON.stringify(input),
-      createdAt: now,
-    }).run();
-
+    db.insert(leads).values({ id: leadId, organizationId: org.id, name: input.name, company: input.company?.trim() || 'Unknown company', source: input.source, service: input.service?.trim() || 'General inquiry', state: input.state?.trim() || 'Unknown', lifecycle: decision.lifecycle, urgency: decision.urgency, assigneeUserId: null, email: input.email?.trim() || 'unknown@example.com', phone: input.phone?.trim() || 'Unknown', receivedAt: now, lastContactAt: null, lastActivityAt: now, firstResponseDueAt: dueAt, inboundPayloadJson: JSON.stringify(input), createdAt: now, updatedAt: now }).run();
+    db.insert(inboundEvents).values({ id: id('evt'), organizationId: org.id, source: input.source, actionable: decision.actionable, status: decision.actionable ? 'accepted' : 'review_required', leadId, payloadJson: JSON.stringify(input), createdAt: now }).run();
     db.insert(activities).values([
       { id: id('act'), leadId, type: 'lead_received', label: 'Lead received', detail: `${input.source} submission normalized into LeadSprint.`, createdAt: now },
       { id: id('act'), leadId, type: 'sla_started', label: 'SLA window started', detail: `First-response window ends ${relativeTime(dueAt)}.`, createdAt: now },
     ]).run();
-
     if (decision.actionable) {
       const body = `Thanks for reaching out — we received your ${input.service?.toLowerCase() || 'inquiry'} and will follow up shortly. Reply here with the best callback time if you’d like.`;
-      db.insert(outboundJobs).values({
-        id: id('job'),
-        leadId,
-        channel: input.email ? 'Email' : 'SMS',
-        status: 'queued',
-        provider: input.email ? 'gmail' : 'sms-placeholder',
-        toAddress: input.email?.trim() || input.phone?.trim() || 'unknown',
-        subject: 'We received your inquiry',
-        body,
-        createdAt: now,
-      }).run();
-      db.insert(communications).values({
-        id: id('comm'),
-        leadId,
-        channel: input.email ? 'Email' : 'SMS',
-        direction: 'Outbound',
-        actorName: 'Bot',
-        subject: input.email ? 'We received your inquiry' : null,
-        summary: 'First-response draft queued for delivery.',
-        content: body,
-        createdAt: now,
-      }).run();
+      db.insert(outboundJobs).values({ id: id('job'), leadId, channel: input.email ? 'Email' : 'SMS', status: 'queued', provider: input.email ? 'gmail' : 'sms-placeholder', toAddress: input.email?.trim() || input.phone?.trim() || 'unknown', subject: 'We received your inquiry', body, createdAt: now }).run();
+      db.insert(communications).values({ id: id('comm'), leadId, channel: input.email ? 'Email' : 'SMS', direction: 'Outbound', actorName: 'Bot', subject: input.email ? 'We received your inquiry' : null, summary: 'First-response draft queued for delivery.', content: body, createdAt: now }).run();
       db.insert(activities).values({ id: id('act'), leadId, type: 'first_response_queued', label: 'First response queued', detail: 'Automated first-response job created for provider dispatch.', createdAt: now }).run();
     } else {
       db.insert(notes).values({ id: id('note'), leadId, authorUserId: 'user_system', authorName: 'System', type: 'review_required', content: 'Inbound submission lacked enough information for automatic outreach. Manual review needed.', createdAt: now }).run();
     }
   });
-
   return getLeadDetail(leadId) as NonNullable<ReturnType<typeof getLeadDetail>>;
 }
 
 export function createManualLead(input: InboundLeadInput) {
-  return createInboundLead({
-    ...input,
-    source: input.source || 'Manual Intake',
-  });
+  return createInboundLead({ ...input, source: input.source || 'Manual Intake' });
+}
+
+export function createLeadIfNotDuplicate(input: InboundLeadInput, mode: 'manual' | 'inbound' = 'manual') {
+  const duplicate = findDuplicateLeads(input);
+  if (duplicate.isDuplicate) return { created: false as const, duplicate, lead: null };
+  const lead = mode === 'manual' ? createManualLead(input) : createInboundLead(input);
+  return { created: true as const, duplicate, lead };
 }
 
 export function importLeadsFromCsv(csvText: string) {
   const lines = csvText.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  if (lines.length < 2) {
-    return { created: [], skipped: [{ rowNumber: 0, reason: 'CSV must include a header row and at least one data row.' }] };
-  }
+  if (lines.length < 2) return { created: [], skipped: [{ rowNumber: 0, reason: 'CSV must include a header row and at least one data row.' }] };
 
   const parseCsvLine = (line: string) => {
     const cells: string[] = [];
@@ -526,15 +408,11 @@ export function importLeadsFromCsv(csvText: string) {
         if (inQuotes && next === '"') {
           current += '"';
           i += 1;
-        } else {
-          inQuotes = !inQuotes;
-        }
+        } else inQuotes = !inQuotes;
       } else if (char === ',' && !inQuotes) {
         cells.push(current.trim());
         current = '';
-      } else {
-        current += char;
-      }
+      } else current += char;
     }
     cells.push(current.trim());
     return cells;
@@ -551,23 +429,17 @@ export function importLeadsFromCsv(csvText: string) {
     const record = Object.fromEntries(headers.map((header, i) => [header, values[i] ?? '']));
     const name = String(record.name || '').trim();
     const source = String(record.source || 'CSV Import').trim();
-
     if (!name) {
       skipped.push({ rowNumber, reason: 'Missing required name field.' });
       return;
     }
-
-    const lead = createManualLead({
-      source,
-      name,
-      company: String(record.company || '').trim(),
-      email: String(record.email || '').trim(),
-      phone: String(record.phone || '').trim(),
-      state: String(record.state || '').trim(),
-      service: String(record.service || '').trim(),
-      details: String(record.details || record.message || '').trim(),
-    });
-    created.push(lead);
+    const payload = { source, name, company: String(record.company || '').trim(), email: String(record.email || '').trim(), phone: String(record.phone || '').trim(), state: String(record.state || '').trim(), service: String(record.service || '').trim(), details: String(record.details || record.message || '').trim() };
+    const result = createLeadIfNotDuplicate(payload, 'manual');
+    if (!result.created) {
+      skipped.push({ rowNumber, reason: `Skipped duplicate. ${result.duplicate.reason ?? 'Matched existing lead.'}` });
+      return;
+    }
+    created.push(result.lead);
   });
 
   return { created, skipped };
@@ -611,48 +483,22 @@ export function queuedOutboundJobs() {
 export function markOutboundJobSent(jobId: string) {
   const job = db.select().from(outboundJobs).where(eq(outboundJobs.id, jobId)).get();
   if (!job) throw new Error('Outbound job not found');
-
   const now = iso();
   db.transaction(() => {
     db.update(outboundJobs).set({ status: 'sent' }).where(eq(outboundJobs.id, jobId)).run();
-    db.insert(communications).values({
-      id: id('comm'),
-      leadId: job.leadId,
-      channel: job.channel,
-      direction: 'Outbound',
-      actorName: 'Dispatcher',
-      subject: job.subject,
-      summary: 'Queued outbound job marked sent by operator.',
-      content: job.body,
-      createdAt: now,
-    }).run();
+    db.insert(communications).values({ id: id('comm'), leadId: job.leadId, channel: job.channel, direction: 'Outbound', actorName: 'Dispatcher', subject: job.subject, summary: 'Queued outbound job marked sent by operator.', content: job.body, createdAt: now }).run();
     db.update(leads).set({ lastContactAt: now, lastActivityAt: now, updatedAt: now, lifecycle: 'Contacted' }).where(eq(leads.id, job.leadId)).run();
-    db.insert(activities).values({
-      id: id('act'),
-      leadId: job.leadId,
-      type: 'outbound_job_sent',
-      label: 'Outbound sent',
-      detail: `${job.channel} job was marked sent through the dispatch queue.`,
-      createdAt: now,
-    }).run();
+    db.insert(activities).values({ id: id('act'), leadId: job.leadId, type: 'outbound_job_sent', label: 'Outbound sent', detail: `${job.channel} job was marked sent through the dispatch queue.`, createdAt: now }).run();
   });
 }
 
 export function markOutboundJobFailed(jobId: string, reason?: string) {
   const job = db.select().from(outboundJobs).where(eq(outboundJobs.id, jobId)).get();
   if (!job) throw new Error('Outbound job not found');
-
   const now = iso();
   db.update(outboundJobs).set({ status: 'failed' }).where(eq(outboundJobs.id, jobId)).run();
   db.update(leads).set({ urgency: 'Needs Attention', lastActivityAt: now, updatedAt: now }).where(eq(leads.id, job.leadId)).run();
-  db.insert(activities).values({
-    id: id('act'),
-    leadId: job.leadId,
-    type: 'outbound_job_failed',
-    label: 'Outbound failed',
-    detail: reason?.trim() || `${job.channel} job requires manual intervention.`,
-    createdAt: now,
-  }).run();
+  db.insert(activities).values({ id: id('act'), leadId: job.leadId, type: 'outbound_job_failed', label: 'Outbound failed', detail: reason?.trim() || `${job.channel} job requires manual intervention.`, createdAt: now }).run();
 }
 
 export function reportSummary() {
@@ -660,19 +506,16 @@ export function reportSummary() {
   const sourceCounts = new Map<string, number>();
   const lifecycleCounts = new Map<string, number>();
   const assigneeCounts = new Map<string, number>();
-
   for (const lead of leadRows) {
     sourceCounts.set(lead.source, (sourceCounts.get(lead.source) ?? 0) + 1);
     lifecycleCounts.set(lead.lifecycle, (lifecycleCounts.get(lead.lifecycle) ?? 0) + 1);
     assigneeCounts.set(lead.assigneeName, (assigneeCounts.get(lead.assigneeName) ?? 0) + 1);
   }
-
   const total = leadRows.length;
   const withContact = leadRows.filter((lead) => !!lead.lastContactAt).length;
   const unassigned = leadRows.filter((lead) => lead.assigneeName === 'Unassigned').length;
   const hot = leadRows.filter((lead) => ['Hot', 'SLA Risk'].includes(lead.urgency)).length;
   const converted = leadRows.filter((lead) => lead.lifecycle === 'Converted').length;
-
   return {
     totals: { total, withContact, unassigned, hot, converted },
     bySource: Array.from(sourceCounts.entries()).map(([label, count]) => ({ label, count })).sort((a, b) => b.count - a.count),
@@ -683,43 +526,8 @@ export function reportSummary() {
 
 export function leadsCsv() {
   const rows = listLeads();
-  const header = [
-    'id',
-    'name',
-    'company',
-    'source',
-    'state',
-    'lifecycle',
-    'urgency',
-    'assignee',
-    'email',
-    'phone',
-    'service',
-    'receivedAt',
-    'lastContactAt',
-    'lastActivityAt',
-    'firstResponseDueAt',
-  ];
-
+  const header = ['id', 'name', 'company', 'source', 'state', 'lifecycle', 'urgency', 'assignee', 'email', 'phone', 'service', 'receivedAt', 'lastContactAt', 'lastActivityAt', 'firstResponseDueAt'];
   const escape = (value: string | null | undefined) => `"${String(value ?? '').replace(/"/g, '""')}"`;
-
-  const lines = rows.map((lead) => [
-    lead.id,
-    lead.name,
-    lead.company,
-    lead.source,
-    lead.state,
-    lead.lifecycle,
-    lead.urgency,
-    lead.assigneeName,
-    lead.email,
-    lead.phone,
-    lead.service,
-    lead.receivedAt,
-    lead.lastContactAt,
-    lead.lastActivityAt,
-    lead.firstResponseDueAt,
-  ].map(escape).join(','));
-
+  const lines = rows.map((lead) => [lead.id, lead.name, lead.company, lead.source, lead.state, lead.lifecycle, lead.urgency, lead.assigneeName, lead.email, lead.phone, lead.service, lead.receivedAt, lead.lastContactAt, lead.lastActivityAt, lead.firstResponseDueAt].map(escape).join(','));
   return [header.join(','), ...lines].join('\n');
 }

@@ -13,6 +13,7 @@ This repo now contains:
 - lead filtering/search by query, lifecycle, urgency, and assignee
 - a first-pass role/permission scaffold with server-enforced checks, an in-app acting-user session switcher, DB-backed user permission overrides, and persisted audit logs for sensitive actions
 - manual lead creation plus CSV import from the Leads workspace, with an API import endpoint at `POST /api/import/leads`
+- duplicate detection/hygiene across intake paths, with duplicate lookups exposed at `POST /api/leads/duplicates`
 - a reports/export path including live summaries and `GET /api/reports/leads` CSV export
 
 ## Getting started
