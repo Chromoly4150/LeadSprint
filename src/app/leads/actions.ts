@@ -2,7 +2,15 @@
 
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
-import { addLeadNote, createInboundLead, logManualContact, updateLeadAssignment, updateLeadLifecycle } from '@/lib/db';
+import {
+  addLeadNote,
+  createInboundLead,
+  logManualContact,
+  markOutboundJobFailed,
+  markOutboundJobSent,
+  updateLeadAssignment,
+  updateLeadLifecycle,
+} from '@/lib/db';
 
 export async function createInboundLeadAction(formData: FormData) {
   const lead = createInboundLead({
@@ -58,6 +66,27 @@ export async function logManualContactAction(formData: FormData) {
   if (!summary || !content) return;
   logManualContact(leadId, channel, summary, content);
   revalidatePath('/dashboard');
+  revalidatePath('/leads');
+  revalidatePath(`/leads/${leadId}`);
+}
+
+export async function markOutboundSentAction(formData: FormData) {
+  const jobId = String(formData.get('jobId'));
+  const leadId = String(formData.get('leadId'));
+  markOutboundJobSent(jobId);
+  revalidatePath('/dashboard');
+  revalidatePath('/reports');
+  revalidatePath('/leads');
+  revalidatePath(`/leads/${leadId}`);
+}
+
+export async function markOutboundFailedAction(formData: FormData) {
+  const jobId = String(formData.get('jobId'));
+  const leadId = String(formData.get('leadId'));
+  const reason = String(formData.get('reason') || '').trim();
+  markOutboundJobFailed(jobId, reason);
+  revalidatePath('/dashboard');
+  revalidatePath('/reports');
   revalidatePath('/leads');
   revalidatePath(`/leads/${leadId}`);
 }

@@ -96,7 +96,7 @@ export default function DashboardPage() {
           <ul className="attention-list">
             {jobs.length ? jobs.map((job) => (
               <li key={job.id}>
-                <strong>{job.channel}</strong>
+                <Link href={`/leads/${job.leadId}`} className="lead-link"><strong>{job.channel}</strong></Link>
                 <span className="muted"> · {job.provider} · {job.toAddress}</span>
               </li>
             )) : <li className="muted">No queued jobs.</li>}

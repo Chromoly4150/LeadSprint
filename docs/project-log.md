@@ -14,6 +14,8 @@
 - Confirmed the inbound endpoint works with a live test payload that created a new lead record in the app.
 - Replaced the placeholder Reports screen with live reporting summaries and a CSV export endpoint at `GET /api/reports/leads`.
 - Removed the now-obsolete `src/lib/mock-data.ts` scaffold because the app is now backed by the real SQLite data layer.
+- Added live lead filtering/search on the Leads screen (query, lifecycle, urgency, assignee).
+- Added an operator dispatch workflow for queued outbound jobs so jobs can be marked sent or failed from the lead detail screen and write back into communications/activity state.
 
 ## 2026-03-10
 

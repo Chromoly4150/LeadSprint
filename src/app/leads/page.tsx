@@ -1,11 +1,22 @@
 import Link from 'next/link';
 import { AppShell } from '@/components/app-shell';
 import { Badge, toneForUrgency } from '@/components/badge';
-import { listLeads } from '@/lib/db';
+import { listAssignees, listLeads } from '@/lib/db';
 import { createInboundLeadAction } from '@/app/leads/actions';
 
-export default function LeadsPage() {
-  const leads = listLeads();
+export default async function LeadsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ query?: string; lifecycle?: string; urgency?: string; assignee?: string }>;
+}) {
+  const params = await searchParams;
+  const leads = listLeads({
+    query: params.query,
+    lifecycle: params.lifecycle,
+    urgency: params.urgency,
+    assignee: params.assignee,
+  });
+  const assignees = listAssignees();
 
   return (
     <AppShell title="Leads" subtitle="Real lead workspace backed by SQLite + Drizzle">
@@ -103,6 +114,34 @@ export default function LeadsPage() {
             <span className="pill">Storage: SQLite</span>
           </div>
         </div>
+
+        <form className="filter-bar" method="GET">
+          <input name="query" placeholder="Search name, company, email, phone..." defaultValue={params.query ?? ''} />
+          <select name="lifecycle" defaultValue={params.lifecycle ?? 'All'}>
+            <option>All</option>
+            <option>New</option>
+            <option>Contacted</option>
+            <option>In Progress</option>
+            <option>Qualified</option>
+            <option>Unresponsive</option>
+            <option>Converted</option>
+          </select>
+          <select name="urgency" defaultValue={params.urgency ?? 'All'}>
+            <option>All</option>
+            <option>Hot</option>
+            <option>Warm</option>
+            <option>Needs Attention</option>
+            <option>SLA Risk</option>
+          </select>
+          <select name="assignee" defaultValue={params.assignee ?? 'All'}>
+            <option>All</option>
+            <option>Unassigned</option>
+            {assignees.map((user) => (
+              <option key={user.id} value={user.name}>{user.name}</option>
+            ))}
+          </select>
+          <button type="submit" className="button-secondary">Apply filters</button>
+        </form>
 
         <div className="table-wrap">
           <table>

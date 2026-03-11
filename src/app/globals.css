@@ -83,6 +83,12 @@ p { line-height: 1.5; }
 
 .attention-list, .stack { margin: 0; padding-left: 0; display: flex; flex-direction: column; gap: 10px; list-style: none; }
 .form-stack { gap: 14px; }
+.filter-bar {
+  display: grid;
+  grid-template-columns: 2fr repeat(3, minmax(0, 1fr)) auto;
+  gap: 12px;
+  margin: 0 0 16px;
+}
 .field-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -111,6 +117,9 @@ textarea { resize: vertical; }
   grid-template-columns: 1fr auto;
   gap: 12px;
   align-items: end;
+}
+.fail-inline {
+  grid-template-columns: minmax(220px, 1fr) auto;
 }
 .compact-forms .inline-form + .inline-form { margin-top: 4px; }
 .button-primary, .button-secondary {
@@ -189,5 +198,5 @@ th { color: var(--muted); font-weight: 600; font-size: 13px; }
 }
 
 @media (max-width: 700px) {
-  .kpi-grid, .meta-grid, .field-grid, .inline-form { grid-template-columns: 1fr; }
+  .kpi-grid, .meta-grid, .field-grid, .inline-form, .filter-bar, .fail-inline { grid-template-columns: 1fr; }
 }

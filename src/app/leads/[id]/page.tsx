@@ -2,10 +2,12 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { AppShell } from '@/components/app-shell';
 import { Badge, toneForUrgency } from '@/components/badge';
-import { getLeadDetail, listAssignees } from '@/lib/db';
+import { getLeadDetail, listAssignees, queuedOutboundJobs } from '@/lib/db';
 import {
   addLeadNoteAction,
   logManualContactAction,
+  markOutboundFailedAction,
+  markOutboundSentAction,
   updateAssignmentAction,
   updateLifecycleAction,
 } from '@/app/leads/actions';
@@ -19,6 +21,8 @@ export default async function LeadDetailPage({ params }: { params: Promise<{ id:
   const assignees = listAssignees();
 
   if (!lead) notFound();
+
+  const outboundQueue = queuedOutboundJobs().filter((job) => job.leadId === lead.id);
 
   return (
     <AppShell title="Lead detail" subtitle={`${lead.name} · ${lead.company}`}>
@@ -199,16 +203,37 @@ export default async function LeadDetailPage({ params }: { params: Promise<{ id:
         <article className="card">
           <div className="section-heading">
             <div>
-              <p className="eyebrow">Inbound promise</p>
-              <h3>MVP status</h3>
+              <p className="eyebrow">Dispatch queue</p>
+              <h3>Queued outbound jobs</h3>
             </div>
           </div>
-          <ul className="attention-list">
-            <li>Lead persisted to database</li>
-            <li>Lifecycle and assignee can be updated in-app</li>
-            <li>Manual contacts now write to comms + activity</li>
-            <li>Inbound endpoint can create new leads without touching the UI</li>
-          </ul>
+          <div className="stack">
+            {outboundQueue.length ? outboundQueue.map((job) => (
+              <div key={job.id} className="note-card">
+                <div className="note-header">
+                  <strong>{job.channel} · {job.provider}</strong>
+                  <span className="muted">{new Date(job.createdAt).toLocaleString()}</span>
+                </div>
+                <div className="muted smallcaps">status · {job.status}</div>
+                <p><strong>To:</strong> {job.toAddress}</p>
+                {job.subject ? <p><strong>Subject:</strong> {job.subject}</p> : null}
+                <p className="muted">{job.body}</p>
+                <div className="toolbar">
+                  <form action={markOutboundSentAction}>
+                    <input type="hidden" name="jobId" value={job.id} />
+                    <input type="hidden" name="leadId" value={lead.id} />
+                    <button type="submit" className="button-primary">Mark sent</button>
+                  </form>
+                  <form action={markOutboundFailedAction} className="inline-form fail-inline">
+                    <input type="hidden" name="jobId" value={job.id} />
+                    <input type="hidden" name="leadId" value={lead.id} />
+                    <input name="reason" placeholder="Failure reason / manual follow-up note" />
+                    <button type="submit" className="button-secondary">Mark failed</button>
+                  </form>
+                </div>
+              </div>
+            )) : <p className="muted">No queued outbound jobs for this lead.</p>}
+          </div>
         </article>
       </section>
     </AppShell>

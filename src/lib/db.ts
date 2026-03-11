@@ -208,20 +208,39 @@ export function listAssignees() {
   return db.select().from(users).orderBy(users.name).all();
 }
 
-export function listLeads() {
+export type LeadFilters = {
+  query?: string;
+  lifecycle?: string;
+  urgency?: string;
+  assignee?: string;
+};
+
+export function listLeads(filters?: LeadFilters) {
   const rows = db.select({ lead: leads, assigneeName: users.name })
     .from(leads)
     .leftJoin(users, eq(leads.assigneeUserId, users.id))
     .orderBy(desc(leads.receivedAt))
     .all();
 
-  return rows.map(({ lead, assigneeName }) => ({
+  const normalized = rows.map(({ lead, assigneeName }) => ({
     ...lead,
     assigneeName: assigneeName ?? 'Unassigned',
     receivedLabel: relativeTime(lead.receivedAt),
     lastContactLabel: relativeTime(lead.lastContactAt),
     lastActivityLabel: relativeTime(lead.lastActivityAt),
   }));
+
+  return normalized.filter((lead) => {
+    const query = filters?.query?.trim().toLowerCase();
+    if (query) {
+      const haystack = [lead.name, lead.company, lead.email, lead.phone, lead.service, lead.source, lead.state].join(' ').toLowerCase();
+      if (!haystack.includes(query)) return false;
+    }
+    if (filters?.lifecycle && filters.lifecycle !== 'All' && lead.lifecycle !== filters.lifecycle) return false;
+    if (filters?.urgency && filters.urgency !== 'All' && lead.urgency !== filters.urgency) return false;
+    if (filters?.assignee && filters.assignee !== 'All' && lead.assigneeName !== filters.assignee) return false;
+    return true;
+  });
 }
 
 export function getLeadDetail(leadId: string) {
@@ -402,6 +421,53 @@ export function recentInboundEvents() {
 
 export function queuedOutboundJobs() {
   return db.select().from(outboundJobs).where(eq(outboundJobs.status, 'queued')).orderBy(desc(outboundJobs.createdAt)).all();
+}
+
+export function markOutboundJobSent(jobId: string) {
+  const job = db.select().from(outboundJobs).where(eq(outboundJobs.id, jobId)).get();
+  if (!job) throw new Error('Outbound job not found');
+
+  const now = iso();
+  db.transaction(() => {
+    db.update(outboundJobs).set({ status: 'sent' }).where(eq(outboundJobs.id, jobId)).run();
+    db.insert(communications).values({
+      id: id('comm'),
+      leadId: job.leadId,
+      channel: job.channel,
+      direction: 'Outbound',
+      actorName: 'Dispatcher',
+      subject: job.subject,
+      summary: 'Queued outbound job marked sent by operator.',
+      content: job.body,
+      createdAt: now,
+    }).run();
+    db.update(leads).set({ lastContactAt: now, lastActivityAt: now, updatedAt: now, lifecycle: 'Contacted' }).where(eq(leads.id, job.leadId)).run();
+    db.insert(activities).values({
+      id: id('act'),
+      leadId: job.leadId,
+      type: 'outbound_job_sent',
+      label: 'Outbound sent',
+      detail: `${job.channel} job was marked sent through the dispatch queue.`,
+      createdAt: now,
+    }).run();
+  });
+}
+
+export function markOutboundJobFailed(jobId: string, reason?: string) {
+  const job = db.select().from(outboundJobs).where(eq(outboundJobs.id, jobId)).get();
+  if (!job) throw new Error('Outbound job not found');
+
+  const now = iso();
+  db.update(outboundJobs).set({ status: 'failed' }).where(eq(outboundJobs.id, jobId)).run();
+  db.update(leads).set({ urgency: 'Needs Attention', lastActivityAt: now, updatedAt: now }).where(eq(leads.id, job.leadId)).run();
+  db.insert(activities).values({
+    id: id('act'),
+    leadId: job.leadId,
+    type: 'outbound_job_failed',
+    label: 'Outbound failed',
+    detail: reason?.trim() || `${job.channel} job requires manual intervention.`,
+    createdAt: now,
+  }).run();
 }
 
 export function reportSummary() {
