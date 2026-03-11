@@ -17,6 +17,8 @@
 - Added live lead filtering/search on the Leads screen (query, lifecycle, urgency, assignee).
 - Added an operator dispatch workflow for queued outbound jobs so jobs can be marked sent or failed from the lead detail screen and write back into communications/activity state.
 - Added a first-pass permission enforcement scaffold with role → capability mapping, server-side permission checks in server actions/API routes, a permission-aware settings page, and role-gated UI sections.
+- Replaced the env-only acting-role hack with a lightweight app-session cookie (`leadsprint_user_id`) so the acting user can be switched inside the product.
+- Added persisted user-level permission overrides backed by the database (`permission_assignments`) with settings UI to allow, deny, and clear overrides.
 
 ## 2026-03-10
 

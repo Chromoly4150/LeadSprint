@@ -9,8 +9,8 @@ const navItems = [
   { href: '/settings', label: 'Settings' },
 ];
 
-export function AppShell({ children, title, subtitle }: { children: ReactNode; title: string; subtitle?: string }) {
-  const currentUser = getCurrentUser();
+export async function AppShell({ children, title, subtitle }: { children: ReactNode; title: string; subtitle?: string }) {
+  const currentUser = await getCurrentUser();
 
   return (
     <main className="app-shell">

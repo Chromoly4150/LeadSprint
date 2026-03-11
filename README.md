@@ -11,7 +11,7 @@ This repo now contains:
 - a live Leads workflow with assignment, lifecycle updates, notes, manual contact logging, and queued outbound dispatch controls
 - an inbound MVP endpoint at `POST /api/inbound` that creates leads, logs intake events, starts SLA tracking, and queues a first-response job record
 - lead filtering/search by query, lifecycle, urgency, and assignee
-- a first-pass role/permission scaffold with server-enforced checks and a settings matrix view
+- a first-pass role/permission scaffold with server-enforced checks, an in-app acting-user session switcher, and DB-backed user permission overrides
 - a reports/export path including live summaries and `GET /api/reports/leads` CSV export
 
 ## Getting started

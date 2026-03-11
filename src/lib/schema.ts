@@ -92,5 +92,15 @@ export const outboundJobs = sqliteTable('outbound_jobs', {
   createdAt: text('created_at').default(sql`CURRENT_TIMESTAMP`).notNull(),
 });
 
+export const permissionAssignments = sqliteTable('permission_assignments', {
+  id: text('id').primaryKey(),
+  organizationId: text('organization_id').notNull().references(() => organizations.id),
+  subjectType: text('subject_type').notNull(),
+  subjectId: text('subject_id').notNull(),
+  permissionKey: text('permission_key').notNull(),
+  effect: text('effect').notNull(),
+  createdAt: text('created_at').default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
 export type LeadRow = typeof leads.$inferSelect;
 export type UserRow = typeof users.$inferSelect;

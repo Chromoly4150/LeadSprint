@@ -1,3 +1,6 @@
+import { cookies } from 'next/headers';
+import { db, listAssignees, listPermissionOverrides } from '@/lib/db';
+
 export type Role = 'Owner' | 'Admin' | 'General User' | 'Support User';
 
 export type PermissionKey =
@@ -19,26 +22,28 @@ export type PermissionKey =
   | 'integrations.manage'
   | 'audit.view';
 
+export const allPermissions: PermissionKey[] = [
+  'organization.manage',
+  'users.manage',
+  'permissions.manage',
+  'leads.view',
+  'leads.create',
+  'leads.edit',
+  'leads.assign',
+  'notes.create_internal',
+  'conversations.view',
+  'conversations.takeover',
+  'messaging.send_email',
+  'messaging.send_sms',
+  'messaging.send_other',
+  'exports.run',
+  'reports.view',
+  'integrations.manage',
+  'audit.view',
+];
+
 const rolePermissions: Record<Role, PermissionKey[]> = {
-  Owner: [
-    'organization.manage',
-    'users.manage',
-    'permissions.manage',
-    'leads.view',
-    'leads.create',
-    'leads.edit',
-    'leads.assign',
-    'notes.create_internal',
-    'conversations.view',
-    'conversations.takeover',
-    'messaging.send_email',
-    'messaging.send_sms',
-    'messaging.send_other',
-    'exports.run',
-    'reports.view',
-    'integrations.manage',
-    'audit.view',
-  ],
+  Owner: allPermissions,
   Admin: [
     'users.manage',
     'leads.view',
@@ -84,24 +89,42 @@ export type CurrentUser = {
   role: Role;
 };
 
-const usersByMode: Record<string, CurrentUser> = {
-  owner: { id: 'user_owner', name: 'Josiah', email: 'owner@leadsprint.local', role: 'Owner' },
-  admin: { id: 'user_ava', name: 'Ava', email: 'ava@leadsprint.local', role: 'Admin' },
-  general: { id: 'user_noah', name: 'Noah', email: 'noah@leadsprint.local', role: 'General User' },
-  support: { id: 'user_system', name: 'System', email: 'system@leadsprint.local', role: 'Support User' },
-};
-
-export function getCurrentUser(): CurrentUser {
-  const mode = process.env.LEADSPRINT_ACTING_ROLE?.toLowerCase();
-  return usersByMode[mode ?? 'owner'] ?? usersByMode.owner;
+export async function getCurrentUser(): Promise<CurrentUser> {
+  const cookieStore = await cookies();
+  const actingUserId = cookieStore.get('leadsprint_user_id')?.value;
+  const users = listAssignees();
+  const matched = users.find((user) => user.id === actingUserId) ?? users[0];
+  return {
+    id: matched.id,
+    name: matched.name,
+    email: matched.email,
+    role: matched.role as Role,
+  };
 }
 
-export function hasPermission(user: CurrentUser, permission: PermissionKey) {
-  return rolePermissions[user.role].includes(permission);
+export async function getUserPermissionState(user: CurrentUser) {
+  const overrides = listPermissionOverrides(user.id);
+  const allowed = new Set<PermissionKey>(rolePermissions[user.role]);
+
+  for (const override of overrides) {
+    const permission = override.permissionKey as PermissionKey;
+    if (override.effect === 'allow') allowed.add(permission);
+    if (override.effect === 'deny') allowed.delete(permission);
+  }
+
+  return {
+    allowed: Array.from(allowed),
+    overrides,
+  };
 }
 
-export function requirePermission(user: CurrentUser, permission: PermissionKey) {
-  if (!hasPermission(user, permission)) {
+export async function hasPermission(user: CurrentUser, permission: PermissionKey) {
+  const state = await getUserPermissionState(user);
+  return state.allowed.includes(permission);
+}
+
+export async function requirePermission(user: CurrentUser, permission: PermissionKey) {
+  if (!(await hasPermission(user, permission))) {
     throw new Error(`${user.role} cannot perform ${permission}`);
   }
 }

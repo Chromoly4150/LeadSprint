@@ -11,10 +11,10 @@ import {
   notes,
   organizations,
   outboundJobs,
+  permissionAssignments,
   users,
   type LeadRow,
 } from '@/lib/schema';
-import { getCurrentUser } from '@/lib/permissions';
 
 const dataDir = path.join(process.cwd(), 'data');
 const dbPath = path.join(dataDir, 'leadsprint.sqlite');
@@ -138,6 +138,15 @@ export function initializeDatabase() {
       body TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
+    CREATE TABLE IF NOT EXISTS permission_assignments (
+      id TEXT PRIMARY KEY,
+      organization_id TEXT NOT NULL REFERENCES organizations(id),
+      subject_type TEXT NOT NULL,
+      subject_id TEXT NOT NULL,
+      permission_key TEXT NOT NULL,
+      effect TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
   `);
 }
 
@@ -207,6 +216,59 @@ seedIfEmpty();
 
 export function listAssignees() {
   return db.select().from(users).orderBy(users.name).all();
+}
+
+export function getUserById(userId: string) {
+  return db.select().from(users).where(eq(users.id, userId)).get() ?? null;
+}
+
+export function listPermissionOverrides(userId?: string) {
+  const query = db.select().from(permissionAssignments).orderBy(permissionAssignments.createdAt);
+  return userId ? query.where(eq(permissionAssignments.subjectId, userId)).all() : query.all();
+}
+
+export function setPermissionOverride({
+  organizationId,
+  userId,
+  permissionKey,
+  effect,
+}: {
+  organizationId: string;
+  userId: string;
+  permissionKey: string;
+  effect: 'allow' | 'deny';
+}) {
+  const existing = db.select().from(permissionAssignments)
+    .where(eq(permissionAssignments.subjectId, userId))
+    .all()
+    .find((row) => row.permissionKey === permissionKey);
+
+  if (existing) {
+    db.update(permissionAssignments)
+      .set({ effect })
+      .where(eq(permissionAssignments.id, existing.id))
+      .run();
+    return;
+  }
+
+  db.insert(permissionAssignments).values({
+    id: id('perm'),
+    organizationId,
+    subjectType: 'user',
+    subjectId: userId,
+    permissionKey,
+    effect,
+  }).run();
+}
+
+export function clearPermissionOverride(userId: string, permissionKey: string) {
+  const existing = db.select().from(permissionAssignments)
+    .where(eq(permissionAssignments.subjectId, userId))
+    .all()
+    .find((row) => row.permissionKey === permissionKey);
+
+  if (!existing) return;
+  db.delete(permissionAssignments).where(eq(permissionAssignments.id, existing.id)).run();
 }
 
 export type LeadFilters = {
@@ -402,17 +464,15 @@ export function updateLeadLifecycle(leadId: string, lifecycle: LeadRow['lifecycl
   db.insert(activities).values({ id: id('act'), leadId, type: 'lifecycle_changed', label: 'Lifecycle updated', detail: `Lead moved to ${lifecycle}.`, createdAt: now }).run();
 }
 
-export function addLeadNote(leadId: string, content: string) {
+export function addLeadNote(leadId: string, content: string, actor: { id: string; name: string }) {
   const now = iso();
-  const actor = getCurrentUser();
   db.insert(notes).values({ id: id('note'), leadId, authorUserId: actor.id, authorName: actor.name, type: 'internal_comment', content, createdAt: now }).run();
   db.update(leads).set({ lastActivityAt: now, updatedAt: now }).where(eq(leads.id, leadId)).run();
   db.insert(activities).values({ id: id('act'), leadId, type: 'note_added', label: 'Internal note added', detail: `${actor.name} added internal context to the lead.`, createdAt: now }).run();
 }
 
-export function logManualContact(leadId: string, channel: string, summary: string, content: string) {
+export function logManualContact(leadId: string, channel: string, summary: string, content: string, actor: { name: string }) {
   const now = iso();
-  const actor = getCurrentUser();
   db.insert(communications).values({ id: id('comm'), leadId, channel, direction: 'Outbound', actorName: actor.name, summary, content, createdAt: now }).run();
   db.update(leads).set({ lastContactAt: now, lastActivityAt: now, updatedAt: now, lifecycle: 'Contacted' }).where(eq(leads.id, leadId)).run();
   db.insert(activities).values({ id: id('act'), leadId, type: 'manual_contact_logged', label: 'Manual contact logged', detail: `${channel} contact recorded in lead timeline by ${actor.name}.`, createdAt: now }).run();

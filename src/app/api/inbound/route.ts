@@ -3,8 +3,8 @@ import { createInboundLead } from '@/lib/db';
 import { getCurrentUser, hasPermission } from '@/lib/permissions';
 
 export async function POST(request: NextRequest) {
-  const user = getCurrentUser();
-  if (!hasPermission(user, 'leads.create')) {
+  const user = await getCurrentUser();
+  if (!(await hasPermission(user, 'leads.create'))) {
     return NextResponse.json({ error: `${user.role} cannot create inbound leads.` }, { status: 403 });
   }
 
