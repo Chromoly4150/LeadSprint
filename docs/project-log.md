@@ -19,6 +19,7 @@
 - Added a first-pass permission enforcement scaffold with role → capability mapping, server-side permission checks in server actions/API routes, a permission-aware settings page, and role-gated UI sections.
 - Replaced the env-only acting-role hack with a lightweight app-session cookie (`leadsprint_user_id`) so the acting user can be switched inside the product.
 - Added persisted user-level permission overrides backed by the database (`permission_assignments`) with settings UI to allow, deny, and clear overrides.
+- Added persisted audit logging (`audit_logs`) and now record sensitive lead workflow, dispatch, session switching, and permission override actions.
 
 ## 2026-03-10
 

@@ -5,6 +5,7 @@ import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { count, desc, eq, sql } from 'drizzle-orm';
 import {
   activities,
+  auditLogs,
   communications,
   inboundEvents,
   leads,
@@ -147,6 +148,18 @@ export function initializeDatabase() {
       effect TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
+    CREATE TABLE IF NOT EXISTS audit_logs (
+      id TEXT PRIMARY KEY,
+      organization_id TEXT NOT NULL REFERENCES organizations(id),
+      actor_type TEXT NOT NULL,
+      actor_id TEXT NOT NULL,
+      actor_name TEXT NOT NULL,
+      action TEXT NOT NULL,
+      target_type TEXT NOT NULL,
+      target_id TEXT NOT NULL,
+      metadata_json TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
   `);
 }
 
@@ -216,6 +229,40 @@ seedIfEmpty();
 
 export function listAssignees() {
   return db.select().from(users).orderBy(users.name).all();
+}
+
+export function writeAuditLog({
+  organizationId,
+  actorId,
+  actorName,
+  action,
+  targetType,
+  targetId,
+  metadata,
+}: {
+  organizationId: string;
+  actorId: string;
+  actorName: string;
+  action: string;
+  targetType: string;
+  targetId: string;
+  metadata?: Record<string, unknown>;
+}) {
+  db.insert(auditLogs).values({
+    id: id('audit'),
+    organizationId,
+    actorType: 'user',
+    actorId,
+    actorName,
+    action,
+    targetType,
+    targetId,
+    metadataJson: JSON.stringify(metadata ?? {}),
+  }).run();
+}
+
+export function listAuditLogs(limit = 50) {
+  return db.select().from(auditLogs).orderBy(desc(auditLogs.createdAt)).limit(limit).all();
 }
 
 export function getUserById(userId: string) {

@@ -102,5 +102,18 @@ export const permissionAssignments = sqliteTable('permission_assignments', {
   createdAt: text('created_at').default(sql`CURRENT_TIMESTAMP`).notNull(),
 });
 
+export const auditLogs = sqliteTable('audit_logs', {
+  id: text('id').primaryKey(),
+  organizationId: text('organization_id').notNull().references(() => organizations.id),
+  actorType: text('actor_type').notNull(),
+  actorId: text('actor_id').notNull(),
+  actorName: text('actor_name').notNull(),
+  action: text('action').notNull(),
+  targetType: text('target_type').notNull(),
+  targetId: text('target_id').notNull(),
+  metadataJson: text('metadata_json').notNull(),
+  createdAt: text('created_at').default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
 export type LeadRow = typeof leads.$inferSelect;
 export type UserRow = typeof users.$inferSelect;

@@ -1,6 +1,6 @@
 import { AppShell } from '@/components/app-shell';
 import { PermissionGuard } from '@/components/permission-guard';
-import { listAssignees, listPermissionOverrides } from '@/lib/db';
+import { listAssignees, listAuditLogs, listPermissionOverrides } from '@/lib/db';
 import { allPermissions, getCurrentUser, getUserPermissionState, rolePermissionMatrix } from '@/lib/permissions';
 import { clearPermissionOverrideAction, setActingUserAction, setPermissionOverrideAction } from '@/app/settings/actions';
 
@@ -10,6 +10,7 @@ export default async function SettingsPage() {
   const currentUser = await getCurrentUser();
   const permissionState = await getUserPermissionState(currentUser);
   const overrides = listPermissionOverrides();
+  const auditLogs = listAuditLogs(25);
   const organizationId = users[0]?.organizationId ?? 'org_demo';
 
   return (
@@ -124,28 +125,51 @@ export default async function SettingsPage() {
         </div>
       </section>
 
-      <section className="card">
-        <div className="section-heading">
-          <div>
-            <p className="eyebrow">Current defaults</p>
-            <h3>System role permissions</h3>
-          </div>
-        </div>
-        <div className="stack">
-          {Object.entries(matrix).map(([role, permissions]) => (
-            <div key={role} className="note-card">
-              <div className="note-header">
-                <strong>{role}</strong>
-                <span className="muted">{permissions.length} permissions</span>
-              </div>
-              <div className="permission-chips">
-                {permissions.map((permission) => (
-                  <span key={permission} className="pill">{permission}</span>
-                ))}
-              </div>
+      <section className="split-grid">
+        <article className="card">
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">Current defaults</p>
+              <h3>System role permissions</h3>
             </div>
-          ))}
-        </div>
+          </div>
+          <div className="stack">
+            {Object.entries(matrix).map(([role, permissions]) => (
+              <div key={role} className="note-card">
+                <div className="note-header">
+                  <strong>{role}</strong>
+                  <span className="muted">{permissions.length} permissions</span>
+                </div>
+                <div className="permission-chips">
+                  {permissions.map((permission) => (
+                    <span key={permission} className="pill">{permission}</span>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </article>
+
+        <article className="card">
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">Audit trail</p>
+              <h3>Recent sensitive actions</h3>
+            </div>
+          </div>
+          <div className="stack">
+            {auditLogs.length ? auditLogs.map((entry) => (
+              <div key={entry.id} className="note-card">
+                <div className="note-header">
+                  <strong>{entry.actorName}</strong>
+                  <span className="muted">{new Date(entry.createdAt).toLocaleString()}</span>
+                </div>
+                <div className="muted smallcaps">{entry.action}</div>
+                <p className="muted">{entry.targetType} · {entry.targetId}</p>
+              </div>
+            )) : <p className="muted">No audit entries yet.</p>}
+          </div>
+        </article>
       </section>
     </AppShell>
   );
