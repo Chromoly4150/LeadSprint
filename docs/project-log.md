@@ -1,5 +1,20 @@
 # Project Log
 
+## 2026-03-11
+
+- Replaced the static mock-data-only app behavior with a lightweight real data layer backed by SQLite (`data/leadsprint.sqlite`) and Drizzle.
+- Added concrete tables for organizations, users, leads, notes, communications, activities, inbound events, and outbound jobs.
+- Seeded the app with demo org/user/lead records so the product can boot into a realistic operational state without manual setup.
+- Updated Dashboard and Leads to read from the live database rather than in-memory arrays.
+- Added server actions so lead detail now supports real workflow operations: assignment changes, lifecycle changes, internal note creation, and manual contact logging.
+- Added a unified lead timeline that combines activities, notes, and communications.
+- Implemented the first inbound MVP endpoint at `POST /api/inbound`.
+- Defined the current inbound behavior so normalized intake creates a lead, records the inbound event, starts the SLA window, and queues a placeholder first-response outbound job when the submission is actionable.
+- Confirmed the app builds successfully after the data/workflow changes.
+- Confirmed the inbound endpoint works with a live test payload that created a new lead record in the app.
+- Replaced the placeholder Reports screen with live reporting summaries and a CSV export endpoint at `GET /api/reports/leads`.
+- Removed the now-obsolete `src/lib/mock-data.ts` scaffold because the app is now backed by the real SQLite data layer.
+
 ## 2026-03-10
 
 - Confirmed the project should be thought of as a **platform/service** rather than just an internal one-off lead list effort.

@@ -2,11 +2,21 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { AppShell } from '@/components/app-shell';
 import { Badge, toneForUrgency } from '@/components/badge';
-import { getLead } from '@/lib/mock-data';
+import { getLeadDetail, listAssignees } from '@/lib/db';
+import {
+  addLeadNoteAction,
+  logManualContactAction,
+  updateAssignmentAction,
+  updateLifecycleAction,
+} from '@/app/leads/actions';
+
+const lifecycleOptions = ['New', 'Contacted', 'In Progress', 'Qualified', 'Unresponsive', 'Converted'];
+const channelOptions = ['Call', 'SMS', 'Email', 'Chat'];
 
 export default async function LeadDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const lead = getLead(id);
+  const lead = getLeadDetail(id);
+  const assignees = listAssignees();
 
   if (!lead) notFound();
 
@@ -21,7 +31,8 @@ export default async function LeadDetailPage({ params }: { params: Promise<{ id:
         <div className="toolbar">
           <Badge>{lead.lifecycle}</Badge>
           <Badge tone={toneForUrgency(lead.urgency)}>{lead.urgency}</Badge>
-          <span className="pill">Assigned: {lead.assignee}</span>
+          <span className="pill">Assigned: {lead.assigneeName}</span>
+          <span className="pill">Received: {lead.receivedLabel}</span>
         </div>
       </header>
 
@@ -38,29 +49,75 @@ export default async function LeadDetailPage({ params }: { params: Promise<{ id:
             <div><dt>Phone</dt><dd>{lead.phone}</dd></div>
             <div><dt>Source</dt><dd>{lead.source}</dd></div>
             <div><dt>State</dt><dd>{lead.state}</dd></div>
-            <div><dt>Received</dt><dd>{lead.receivedAt}</dd></div>
-            <div><dt>Last activity</dt><dd>{lead.lastActivity}</dd></div>
+            <div><dt>Received</dt><dd>{lead.receivedLabel}</dd></div>
+            <div><dt>Last contact</dt><dd>{lead.lastContactLabel}</dd></div>
+            <div><dt>Last activity</dt><dd>{lead.lastActivityLabel}</dd></div>
+            <div><dt>First response due</dt><dd>{lead.firstResponseDueAt ? new Date(lead.firstResponseDueAt).toLocaleString() : '—'}</dd></div>
           </dl>
         </article>
 
         <article className="card">
           <div className="section-heading">
             <div>
-              <p className="eyebrow">Internal notes</p>
-              <h3>Org-only context</h3>
+              <p className="eyebrow">Operations</p>
+              <h3>Work the lead</h3>
             </div>
           </div>
-          <div className="stack">
-            {lead.notes.map((note) => (
-              <div key={note.id} className="note-card">
-                <div className="note-header">
-                  <strong>{note.author}</strong>
-                  <span className="muted">{note.createdAt}</span>
-                </div>
-                <div className="muted smallcaps">{note.type.replace('_', ' ')}</div>
-                <p>{note.content}</p>
+          <div className="stack form-stack compact-forms">
+            <form action={updateAssignmentAction} className="inline-form">
+              <input type="hidden" name="leadId" value={lead.id} />
+              <label>
+                <span>Assignee</span>
+                <select name="assigneeUserId" defaultValue={lead.assigneeUserId ?? ''}>
+                  <option value="">Unassigned</option>
+                  {assignees.map((user) => (
+                    <option key={user.id} value={user.id}>{user.name} · {user.role}</option>
+                  ))}
+                </select>
+              </label>
+              <button type="submit" className="button-secondary">Save assignment</button>
+            </form>
+
+            <form action={updateLifecycleAction} className="inline-form">
+              <input type="hidden" name="leadId" value={lead.id} />
+              <label>
+                <span>Lifecycle</span>
+                <select name="lifecycle" defaultValue={lead.lifecycle}>
+                  {lifecycleOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+                </select>
+              </label>
+              <button type="submit" className="button-secondary">Update lifecycle</button>
+            </form>
+
+            <form action={addLeadNoteAction} className="stack">
+              <input type="hidden" name="leadId" value={lead.id} />
+              <label>
+                <span>Internal note</span>
+                <textarea name="content" rows={4} placeholder="Add internal context, call prep, or handoff notes." />
+              </label>
+              <button type="submit" className="button-secondary">Add note</button>
+            </form>
+
+            <form action={logManualContactAction} className="stack">
+              <input type="hidden" name="leadId" value={lead.id} />
+              <div className="field-grid">
+                <label>
+                  <span>Channel</span>
+                  <select name="channel" defaultValue="Call">
+                    {channelOptions.map((option) => <option key={option}>{option}</option>)}
+                  </select>
+                </label>
+                <label>
+                  <span>Summary</span>
+                  <input name="summary" placeholder="Left voicemail and texted callback window." />
+                </label>
               </div>
-            ))}
+              <label>
+                <span>Detail</span>
+                <textarea name="content" rows={4} placeholder="What happened, what the lead asked for, and next step." />
+              </label>
+              <button type="submit" className="button-primary">Log manual contact</button>
+            </form>
           </div>
         </article>
       </section>
@@ -81,9 +138,9 @@ export default async function LeadDetailPage({ params }: { params: Promise<{ id:
                     <Badge>{item.channel}</Badge>
                     <Badge>{item.direction}</Badge>
                   </div>
-                  <span className="muted">{item.createdAt}</span>
+                  <span className="muted">{new Date(item.createdAt).toLocaleString()}</span>
                 </div>
-                <strong>{item.actor}</strong>
+                <strong>{item.actorName}</strong>
                 {item.subject ? <div className="muted">Subject: {item.subject}</div> : null}
                 <p><strong>Summary:</strong> {item.summary}</p>
                 <p className="muted">{item.content}</p>
@@ -95,24 +152,63 @@ export default async function LeadDetailPage({ params }: { params: Promise<{ id:
         <article className="card">
           <div className="section-heading">
             <div>
-              <p className="eyebrow">Activity</p>
-              <h3>Timeline</h3>
+              <p className="eyebrow">Unified timeline</p>
+              <h3>Activity + notes + communication</h3>
             </div>
           </div>
           <div className="stack">
-            {lead.activity.map((item) => (
-              <div key={item.id} className="timeline-item">
+            {lead.timeline.map((item, index) => (
+              <div key={`${item.kind}-${index}-${item.createdAt}`} className="timeline-item">
                 <div className="timeline-topline">
-                  <strong>{item.label}</strong>
-                  <span className="muted">{item.createdAt}</span>
+                  <strong>{item.title}</strong>
+                  <span className="muted">{new Date(item.createdAt).toLocaleString()}</span>
                 </div>
-                <p className="muted">{item.detail}</p>
+                <div className="muted smallcaps">{item.kind} · {item.subtitle}</div>
+                <p className="muted">{item.body}</p>
               </div>
             ))}
           </div>
           <div className="detail-actions">
             <Link href="/leads" className="pill">Back to leads</Link>
           </div>
+        </article>
+      </section>
+
+      <section className="split-grid">
+        <article className="card">
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">Internal notes</p>
+              <h3>Org-only context</h3>
+            </div>
+          </div>
+          <div className="stack">
+            {lead.notes.map((note) => (
+              <div key={note.id} className="note-card">
+                <div className="note-header">
+                  <strong>{note.authorName}</strong>
+                  <span className="muted">{new Date(note.createdAt).toLocaleString()}</span>
+                </div>
+                <div className="muted smallcaps">{note.type.replace('_', ' ')}</div>
+                <p>{note.content}</p>
+              </div>
+            ))}
+          </div>
+        </article>
+
+        <article className="card">
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">Inbound promise</p>
+              <h3>MVP status</h3>
+            </div>
+          </div>
+          <ul className="attention-list">
+            <li>Lead persisted to database</li>
+            <li>Lifecycle and assignee can be updated in-app</li>
+            <li>Manual contacts now write to comms + activity</li>
+            <li>Inbound endpoint can create new leads without touching the UI</li>
+          </ul>
         </article>
       </section>
     </AppShell>

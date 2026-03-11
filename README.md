@@ -6,8 +6,11 @@ LeadSprint is an organization-first lead contact platform for generating leads, 
 
 This repo now contains:
 - product and architecture docs in `docs/`
-- an initial Next.js application scaffold in `src/`
-- a first-pass UI shell for Dashboard, Leads, and Reports
+- a Next.js application in `src/`
+- a lightweight SQLite + Drizzle data backbone in `data/leadsprint.sqlite`
+- a live Leads workflow with assignment, lifecycle updates, notes, and manual contact logging
+- an inbound MVP endpoint at `POST /api/inbound` that creates leads, logs intake events, starts SLA tracking, and queues a first-response job record
+- a reports/export path including live summaries and `GET /api/reports/leads` CSV export
 
 ## Getting started
 
@@ -17,6 +20,30 @@ npm run dev
 ```
 
 Then open <http://localhost:3000>.
+
+### Inbound MVP test
+
+You can create a lead through the UI or post directly to the ingestion endpoint:
+
+```bash
+curl -X POST http://localhost:3000/api/inbound \
+  -H 'content-type: application/json' \
+  -d '{
+    "source": "Webhook",
+    "name": "Casey Nguyen",
+    "company": "Nguyen Realty",
+    "email": "casey@example.com",
+    "state": "GA",
+    "service": "Refi inquiry",
+    "details": "Requested callback before lunch"
+  }'
+```
+
+This will:
+- create the lead
+- store an inbound event
+- start the first-response SLA window
+- queue a placeholder outbound first-response job when enough contact data exists
 
 ## Key docs
 

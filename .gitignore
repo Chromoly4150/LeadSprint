@@ -21,7 +21,12 @@ venv/
 /data/raw/
 /data/enriched/
 /data/exports/
+/data/*.sqlite
+/data/*.sqlite-*
 
 # Logs
 *.log
 logs/
+
+# TypeScript
+*.tsbuildinfo
