@@ -6,7 +6,9 @@ import { getCurrentUser, requirePermission } from '@/lib/permissions';
 import {
   addLeadNote,
   createInboundLead,
+  createManualLead,
   getLeadDetail,
+  importLeadsFromCsv,
   logManualContact,
   markOutboundJobFailed,
   markOutboundJobSent,
@@ -20,7 +22,7 @@ export async function createInboundLeadAction(formData: FormData) {
   await requirePermission(user, 'leads.create');
 
   const payload = {
-    source: String(formData.get('source') || 'Manual Intake'),
+    source: String(formData.get('source') || 'Website Form'),
     name: String(formData.get('name') || '').trim(),
     company: String(formData.get('company') || '').trim(),
     email: String(formData.get('email') || '').trim(),
@@ -44,6 +46,61 @@ export async function createInboundLeadAction(formData: FormData) {
   revalidatePath('/leads');
   revalidatePath(`/leads/${lead.id}`);
   redirect(`/leads/${lead.id}`);
+}
+
+export async function createManualLeadAction(formData: FormData) {
+  const user = await getCurrentUser();
+  await requirePermission(user, 'leads.create');
+
+  const payload = {
+    source: String(formData.get('source') || 'Manual Intake'),
+    name: String(formData.get('name') || '').trim(),
+    company: String(formData.get('company') || '').trim(),
+    email: String(formData.get('email') || '').trim(),
+    phone: String(formData.get('phone') || '').trim(),
+    state: String(formData.get('state') || '').trim(),
+    service: String(formData.get('service') || '').trim(),
+    details: String(formData.get('details') || '').trim(),
+  };
+  const lead = createManualLead(payload);
+  writeAuditLog({
+    organizationId: lead.organizationId,
+    actorId: user.id,
+    actorName: user.name,
+    action: 'lead.manual_created',
+    targetType: 'lead',
+    targetId: lead.id,
+    metadata: { source: lead.source, urgency: lead.urgency },
+  });
+
+  revalidatePath('/dashboard');
+  revalidatePath('/leads');
+  revalidatePath(`/leads/${lead.id}`);
+  redirect(`/leads/${lead.id}`);
+}
+
+export async function importLeadsCsvAction(formData: FormData) {
+  const user = await getCurrentUser();
+  await requirePermission(user, 'leads.create');
+
+  const csvText = String(formData.get('csvText') || '').trim();
+  if (!csvText) return;
+
+  const result = importLeadsFromCsv(csvText);
+  const organizationId = result.created[0]?.organizationId ?? 'org_demo';
+  writeAuditLog({
+    organizationId,
+    actorId: user.id,
+    actorName: user.name,
+    action: 'lead.csv_imported',
+    targetType: 'import',
+    targetId: `csv_${Date.now()}`,
+    metadata: { created: result.created.length, skipped: result.skipped.length },
+  });
+
+  revalidatePath('/dashboard');
+  revalidatePath('/leads');
+  revalidatePath('/reports');
 }
 
 export async function updateAssignmentAction(formData: FormData) {

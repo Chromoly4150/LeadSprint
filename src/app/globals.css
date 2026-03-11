@@ -56,6 +56,7 @@ p { line-height: 1.5; }
 }
 .kpi-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .split-grid-rail { grid-template-columns: 1.3fr .9fr; }
+.split-grid-rail-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .detail-grid {
   display: grid;
   grid-template-columns: 1.1fr 1fr;
@@ -208,5 +209,5 @@ th { color: var(--muted); font-weight: 600; font-size: 13px; }
 }
 
 @media (max-width: 700px) {
-  .kpi-grid, .meta-grid, .field-grid, .inline-form, .filter-bar, .fail-inline { grid-template-columns: 1fr; }
+  .kpi-grid, .meta-grid, .field-grid, .inline-form, .filter-bar, .fail-inline, .split-grid-rail-3 { grid-template-columns: 1fr; }
 }

@@ -3,7 +3,7 @@ import { AppShell } from '@/components/app-shell';
 import { Badge, toneForUrgency } from '@/components/badge';
 import { PermissionGuard } from '@/components/permission-guard';
 import { listAssignees, listLeads } from '@/lib/db';
-import { createInboundLeadAction } from '@/app/leads/actions';
+import { createInboundLeadAction, createManualLeadAction, importLeadsCsvAction } from '@/app/leads/actions';
 
 export default async function LeadsPage({
   searchParams,
@@ -29,7 +29,7 @@ export default async function LeadsPage({
         </div>
       </header>
 
-      <section className="split-grid split-grid-rail">
+      <section className="split-grid split-grid-rail-3">
         <article className="card">
           <div className="section-heading">
             <div>
@@ -49,7 +49,6 @@ export default async function LeadsPage({
                     <option>Website Form</option>
                     <option>Google Form</option>
                     <option>Webhook</option>
-                    <option>Manual Intake</option>
                   </select>
                 </label>
                 <label>
@@ -95,16 +94,79 @@ export default async function LeadsPage({
         <article className="card">
           <div className="section-heading">
             <div>
-              <p className="eyebrow">Current controls</p>
-              <h3>Now connected to the data layer</h3>
+              <p className="eyebrow">Manual intake</p>
+              <h3>Create operator-entered lead</h3>
             </div>
           </div>
-          <ul className="attention-list">
-            <li>Live records are loaded from <code>data/leadsprint.sqlite</code></li>
-            <li>Inbound creates lead + event + activity + optional outbound queue item</li>
-            <li>Lead detail supports assignment, lifecycle updates, notes, and manual contact logging</li>
-          </ul>
-          <p className="muted small">Try posting JSON to <code>/api/inbound</code> to test the ingestion endpoint directly.</p>
+          <PermissionGuard
+            permission="leads.create"
+            fallback={<p className="muted">Your current role cannot create manual leads.</p>}
+          >
+            <form action={createManualLeadAction} className="stack form-stack">
+              <input type="hidden" name="source" value="Manual Intake" />
+              <div className="field-grid">
+                <label>
+                  <span>Name</span>
+                  <input name="name" placeholder="Jamie Rivera" required />
+                </label>
+                <label>
+                  <span>Company</span>
+                  <input name="company" placeholder="Rivera Insurance" />
+                </label>
+              </div>
+              <div className="field-grid">
+                <label>
+                  <span>Email</span>
+                  <input name="email" type="email" placeholder="jamie@example.com" />
+                </label>
+                <label>
+                  <span>Phone</span>
+                  <input name="phone" placeholder="(555) 111-2222" />
+                </label>
+              </div>
+              <div className="field-grid">
+                <label>
+                  <span>Service</span>
+                  <input name="service" placeholder="Referral setup" />
+                </label>
+                <label>
+                  <span>State</span>
+                  <input name="state" placeholder="NC" />
+                </label>
+              </div>
+              <label>
+                <span>Details</span>
+                <textarea name="details" rows={3} placeholder="Operator notes from phone call or imported CRM context." />
+              </label>
+              <button type="submit" className="button-secondary">Create manual lead</button>
+            </form>
+          </PermissionGuard>
+        </article>
+
+        <article className="card">
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">CSV import</p>
+              <h3>Bulk-create leads</h3>
+            </div>
+          </div>
+          <PermissionGuard
+            permission="leads.create"
+            fallback={<p className="muted">Your current role cannot import leads.</p>}
+          >
+            <form action={importLeadsCsvAction} className="stack form-stack">
+              <label>
+                <span>Paste CSV</span>
+                <textarea
+                  name="csvText"
+                  rows={10}
+                  placeholder={"name,company,email,phone,state,service,details,source\nJamie Rivera,Rivera Insurance,jamie@example.com,(555) 111-2222,NC,Referral setup,Needs follow-up this afternoon,CSV Import"}
+                />
+              </label>
+              <p className="muted small">Expected headers: name, company, email, phone, state, service, details, source. Missing name rows are skipped.</p>
+              <button type="submit" className="button-secondary">Import CSV leads</button>
+            </form>
+          </PermissionGuard>
         </article>
       </section>
 

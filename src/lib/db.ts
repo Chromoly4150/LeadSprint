@@ -408,6 +408,10 @@ export type InboundLeadInput = {
   details?: string;
 };
 
+export type ImportedLeadRow = InboundLeadInput & {
+  rowNumber: number;
+};
+
 function leadUrgency(input: InboundLeadInput) {
   const actionable = Boolean(input.name && (input.email || input.phone) && input.details);
   return {
@@ -496,6 +500,77 @@ export function createInboundLead(input: InboundLeadInput) {
   });
 
   return getLeadDetail(leadId) as NonNullable<ReturnType<typeof getLeadDetail>>;
+}
+
+export function createManualLead(input: InboundLeadInput) {
+  return createInboundLead({
+    ...input,
+    source: input.source || 'Manual Intake',
+  });
+}
+
+export function importLeadsFromCsv(csvText: string) {
+  const lines = csvText.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (lines.length < 2) {
+    return { created: [], skipped: [{ rowNumber: 0, reason: 'CSV must include a header row and at least one data row.' }] };
+  }
+
+  const parseCsvLine = (line: string) => {
+    const cells: string[] = [];
+    let current = '';
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i += 1) {
+      const char = line[i];
+      const next = line[i + 1];
+      if (char === '"') {
+        if (inQuotes && next === '"') {
+          current += '"';
+          i += 1;
+        } else {
+          inQuotes = !inQuotes;
+        }
+      } else if (char === ',' && !inQuotes) {
+        cells.push(current.trim());
+        current = '';
+      } else {
+        current += char;
+      }
+    }
+    cells.push(current.trim());
+    return cells;
+  };
+
+  const headers = parseCsvLine(lines[0]).map((header) => header.toLowerCase());
+  const rows = lines.slice(1);
+  const created: ReturnType<typeof getLeadDetail>[] = [];
+  const skipped: { rowNumber: number; reason: string }[] = [];
+
+  rows.forEach((line, index) => {
+    const rowNumber = index + 2;
+    const values = parseCsvLine(line);
+    const record = Object.fromEntries(headers.map((header, i) => [header, values[i] ?? '']));
+    const name = String(record.name || '').trim();
+    const source = String(record.source || 'CSV Import').trim();
+
+    if (!name) {
+      skipped.push({ rowNumber, reason: 'Missing required name field.' });
+      return;
+    }
+
+    const lead = createManualLead({
+      source,
+      name,
+      company: String(record.company || '').trim(),
+      email: String(record.email || '').trim(),
+      phone: String(record.phone || '').trim(),
+      state: String(record.state || '').trim(),
+      service: String(record.service || '').trim(),
+      details: String(record.details || record.message || '').trim(),
+    });
+    created.push(lead);
+  });
+
+  return { created, skipped };
 }
 
 export function updateLeadAssignment(leadId: string, assigneeUserId: string | null) {

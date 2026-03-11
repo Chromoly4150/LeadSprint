@@ -20,6 +20,8 @@
 - Replaced the env-only acting-role hack with a lightweight app-session cookie (`leadsprint_user_id`) so the acting user can be switched inside the product.
 - Added persisted user-level permission overrides backed by the database (`permission_assignments`) with settings UI to allow, deny, and clear overrides.
 - Added persisted audit logging (`audit_logs`) and now record sensitive lead workflow, dispatch, session switching, and permission override actions.
+- Added a true manual lead creation path in the Leads workspace for operator-entered records.
+- Added CSV lead import via both the Leads workspace and `POST /api/import/leads`, including audit logging for bulk imports.
 
 ## 2026-03-10
 
