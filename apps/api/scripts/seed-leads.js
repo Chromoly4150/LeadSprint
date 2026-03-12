@@ -5,6 +5,14 @@ runMigrations();
 const db = ensureDb();
 
 const DEFAULT_ORG_ID = process.env.DEFAULT_ORG_ID || 'org_default';
+const DEFAULT_ORG_NAME = process.env.DEFAULT_ORG_NAME || 'LeadSprint Demo Org';
+
+const orgExists = db.prepare(`SELECT id FROM organizations WHERE id = ? LIMIT 1`).get(DEFAULT_ORG_ID);
+if (!orgExists) {
+  const ts = nowIso();
+  db.prepare(`INSERT INTO organizations (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)`)
+    .run(DEFAULT_ORG_ID, DEFAULT_ORG_NAME, ts, ts);
+}
 
 const sample = [
   ['Jamie Carter', 'jamie@example.com', null, 'facebook_ads', 'Need estimate for bathroom remodel'],
