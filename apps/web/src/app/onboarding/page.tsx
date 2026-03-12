@@ -1,10 +1,13 @@
 import Link from 'next/link';
 import { AppShell, cardStyle } from '../../components/app-shell';
+import { WorkspaceBadge } from '../../components/workspace-badge';
 import { authScaffoldEnabled } from '../../lib/auth/config';
 import { getCurrentAuthUser } from '../../lib/auth/current-user';
+import { getProvisioningState } from '../../lib/auth/provisioning';
 
 export default async function OnboardingPage() {
   const currentUser = await getCurrentAuthUser();
+  const provisioning = await getProvisioningState();
 
   return (
     <AppShell
@@ -35,12 +38,15 @@ export default async function OnboardingPage() {
       </section>
 
       <section style={{ ...cardStyle, marginTop: 16 }}>
-        <h2 style={{ marginTop: 0 }}>Current scaffold status</h2>
-        <ul>
-          <li>Clerk package installed: {authScaffoldEnabled ? 'yes' : 'not configured yet'}</li>
-          <li>Current authenticated user: {currentUser?.email || 'none'}</li>
-          <li>Provisioning endpoints are being wired in now</li>
-        </ul>
+        <h2 style={{ marginTop: 0 }}>Current auth and provisioning state</h2>
+        <div style={{ display: 'grid', gap: 8 }}>
+          <div>Clerk configured: {authScaffoldEnabled ? 'yes' : 'not configured yet'}</div>
+          <div>Authenticated user: {currentUser?.email || 'none'}</div>
+          <div>Provisioning state: {provisioning.state}</div>
+          {'workspace' in provisioning ? (
+            <WorkspaceBadge workspaceType={provisioning.workspace?.workspaceType} role={provisioning.user?.role} />
+          ) : null}
+        </div>
         <p style={{ marginBottom: 0 }}>
           If you already belong to a verified business workspace later on, you’ll be invited by that workspace’s owner/admin rather than joining publicly.
         </p>

@@ -39,14 +39,25 @@ You need two running services:
 
 Required:
 - `NEXT_PUBLIC_API_BASE`
+- `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`
+- `CLERK_SECRET_KEY`
+- `INTERNAL_API_AUTH_SECRET`
 
 Example:
 
 ```bash
 NEXT_PUBLIC_API_BASE=https://your-api-host.example.com
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_...
+CLERK_SECRET_KEY=sk_...
+INTERNAL_API_AUTH_SECRET=choose-a-long-random-secret
 ```
 
 ### apps/api
+
+Required:
+- `INTERNAL_API_AUTH_SECRET`
+
+It must exactly match the `INTERNAL_API_AUTH_SECRET` used by `apps/web`.
 
 Current branch uses the local SQLite-backed setup already in the repo.
 For temporary testing, initialize once before first run:
@@ -92,7 +103,8 @@ Before sending to a partner, verify:
 This is a **semi-functional test build**, not production-ready software.
 
 Known caveats:
-- permissions / auth are still simplified
+- Clerk auth is now scaffolded and requires Render env configuration to work in hosted environments
+- onboarding/admin UX is rough but functional rather than polished
 - temporary hosting setup is manual
 - inbox is built on top of current lead communications, not a final dedicated conversation model
 - duplicate detection is present in the API intake flow, but import hygiene still needs more polish in the remote-main architecture

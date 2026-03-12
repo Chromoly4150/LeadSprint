@@ -1,4 +1,5 @@
 import { AppShell, cardStyle, inputStyle } from '../../../components/app-shell';
+import { WorkspaceBadge } from '../../../components/workspace-badge';
 import { internalApiFetch } from '../../../lib/api/internal-api';
 import {
   approveBusinessRequestAction,
@@ -36,11 +37,12 @@ export default async function SettingsPage() {
     internalApiFetch<{ requests: AccessRequestRow[] }>('/api/admin/access-requests'),
   ]);
 
-  const organizationId = meRes.actor.id ? undefined : undefined;
   let invitationsRes: { invitations: InvitationRow[] } | null = null;
   let orgIdForInvites: string | null = null;
+  let workspaceType: string | null = null;
   try {
     const access = await internalApiFetch<{ state: string; workspace?: { id: string; workspaceType: string } }>('/api/access/me');
+    workspaceType = access.workspace?.workspaceType || null;
     orgIdForInvites = access.workspace?.workspaceType === 'business_verified' ? access.workspace.id : null;
     if (orgIdForInvites) {
       invitationsRes = await internalApiFetch<{ invitations: InvitationRow[] }>(`/api/organizations/${orgIdForInvites}/invitations`);
@@ -51,6 +53,17 @@ export default async function SettingsPage() {
 
   return (
     <AppShell title="Settings" subtitle="Team, provider, onboarding review, and invite management">
+      <section style={{ ...cardStyle, marginBottom: 16 }}>
+        <h2 style={{ marginTop: 0 }}>Current workspace</h2>
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+          <WorkspaceBadge workspaceType={workspaceType} role={meRes.actor.role} />
+          <span style={{ color: '#6b7280', fontSize: 13 }}>{meRes.actor.email}</span>
+        </div>
+        <p style={{ marginBottom: 0, color: '#6b7280' }}>
+          Individual workspaces stay solo. Verified business workspaces can review access requests and invite teammates.
+        </p>
+      </section>
+
       <section style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: 16 }}>
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0 }}>Team</h2>
