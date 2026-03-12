@@ -14,7 +14,7 @@ app.use(express.json());
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,PUT,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,x-user-email,x-clerk-user-id');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,x-user-email,x-clerk-user-id,x-internal-auth-ts,x-internal-auth-signature');
   if (req.method === 'OPTIONS') return res.status(204).end();
   next();
 });
@@ -156,6 +156,7 @@ if (!existingSettings) {
 
 const defaultOwnerEmail = normalizeString(process.env.DEFAULT_OWNER_EMAIL || 'owner@leadsprint.local').toLowerCase();
 const defaultOwnerName = normalizeString(process.env.DEFAULT_OWNER_NAME || 'Organization Owner');
+const INTERNAL_API_AUTH_SECRET = normalizeString(process.env.INTERNAL_API_AUTH_SECRET);
 const GMAIL_JSON_PATH = path.join(__dirname, '..', '..', 'client_secret_852799874294-rtj7qmccrb77pi9lqn7ep9lfuf2d8pm6.apps.googleusercontent.com.json');
 const GMAIL_FALLBACK = {
   clientId: process.env.GMAIL_CLIENT_ID || '',
@@ -284,12 +285,53 @@ function renderTemplate(body, vars = {}) {
   return body.replace(/{{\s*([a-zA-Z0-9_]+)\s*}}/g, (_m, k) => vars[k] ?? `{{${k}}}`);
 }
 
+function getInternalSignaturePayload(req, clerkUserId, email, timestamp) {
+  return [req.method.toUpperCase(), req.path, clerkUserId, email, timestamp].join('\n');
+}
+
+function verifyInternalRequest(req) {
+  const email = normalizeString(req.header('x-user-email')).toLowerCase();
+  const clerkUserId = normalizeString(req.header('x-clerk-user-id'));
+  const timestamp = normalizeString(req.header('x-internal-auth-ts'));
+  const signature = normalizeString(req.header('x-internal-auth-signature'));
+
+  if (!email || !clerkUserId || !timestamp || !signature || !INTERNAL_API_AUTH_SECRET) {
+    return { ok: false, email, clerkUserId };
+  }
+
+  const ts = Date.parse(timestamp);
+  if (!Number.isFinite(ts)) return { ok: false, email, clerkUserId };
+  if (Math.abs(Date.now() - ts) > 5 * 60 * 1000) return { ok: false, email, clerkUserId };
+
+  const expected = crypto
+    .createHmac('sha256', INTERNAL_API_AUTH_SECRET)
+    .update(getInternalSignaturePayload(req, clerkUserId, email, timestamp))
+    .digest('hex');
+
+  try {
+    const ok = crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
+    return { ok, email, clerkUserId };
+  } catch {
+    return { ok: false, email, clerkUserId };
+  }
+}
+
 function getRequestIdentity(req) {
+  const verified = verifyInternalRequest(req);
+  if (verified.ok) {
+    return {
+      email: verified.email || null,
+      clerkUserId: verified.clerkUserId || null,
+      verified: true,
+    };
+  }
+
   const email = normalizeString(req.header('x-user-email')).toLowerCase();
   const clerkUserId = normalizeString(req.header('x-clerk-user-id'));
   return {
     email: email || null,
     clerkUserId: clerkUserId || null,
+    verified: false,
   };
 }
 
@@ -377,6 +419,12 @@ function loadGmailClientConfig() {
 }
 
 function requireAuthenticated(req, res, next) {
+  const identity = getRequestIdentity(req);
+  const allowUnsignedDev = process.env.NODE_ENV !== 'production' && !INTERNAL_API_AUTH_SECRET;
+  if (!identity.verified && !allowUnsignedDev) {
+    return res.status(401).json({ ok: false, error: 'Verified internal identity is required' });
+  }
+
   const actor = getActor(req);
   if (!actor) return res.status(401).json({ ok: false, error: 'Unauthorized' });
   if (actor.status !== 'active') return res.status(403).json({ ok: false, error: 'User is not active' });
@@ -391,6 +439,12 @@ function requireIdentity(req, res, next) {
   if (!identity.email || !identity.clerkUserId) {
     return res.status(401).json({ ok: false, error: 'Authenticated identity is required' });
   }
+
+  const allowUnsignedDev = process.env.NODE_ENV !== 'production' && !INTERNAL_API_AUTH_SECRET;
+  if (!identity.verified && !allowUnsignedDev) {
+    return res.status(401).json({ ok: false, error: 'Verified internal identity is required' });
+  }
+
   req.identity = identity;
   next();
 }
