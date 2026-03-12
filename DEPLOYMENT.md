@@ -96,7 +96,7 @@ Known caveats:
 - temporary hosting setup is manual
 - inbox is built on top of current lead communications, not a final dedicated conversation model
 - duplicate detection is present in the API intake flow, but import hygiene still needs more polish in the remote-main architecture
-- docs in `docs/architecture.md` and `docs/roadmap.md` have local edits not included in this branch yet
+- Render env values should be checked against the actual assigned service URLs if Render gives you names other than `leadsprint-api` / `leadsprint-web`
 
 ## Recommended hosting approach
 

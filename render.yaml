@@ -13,7 +13,7 @@ services:
       - key: DEFAULT_ORG_NAME
         value: LeadSprint Demo Org
       - key: APP_BASE_URL
-        value: https://leadsprint-web.onrender.com
+        value: https://leadsprint-api.onrender.com
 
   - type: web
     name: leadsprint-web
