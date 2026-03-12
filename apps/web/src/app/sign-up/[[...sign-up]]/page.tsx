@@ -2,14 +2,40 @@ import Link from 'next/link';
 import { SignUp } from '@clerk/nextjs';
 import { authScaffoldEnabled, getOnboardingRedirectUrl } from '../../../lib/auth/config';
 
-export default function SignUpPage() {
+export const metadata = {
+  robots: {
+    index: false,
+    follow: false,
+  },
+};
+
+export default function SignUpPage({ searchParams }: { searchParams?: { invite?: string; approved?: string } }) {
+  const allowed = Boolean(searchParams?.invite || searchParams?.approved);
+
   if (!authScaffoldEnabled) {
     return (
       <main style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', padding: 24, background: '#f6f7fb' }}>
         <div style={{ maxWidth: 520, background: '#fff', padding: 24, borderRadius: 16, boxShadow: '0 1px 2px rgba(0,0,0,0.05)' }}>
           <h1 style={{ marginTop: 0 }}>Auth scaffold is installed</h1>
           <p>Clerk is not configured yet. Add the Clerk publishable and secret keys to enable sign-up.</p>
-          <p><Link href="/dashboard">Back to app</Link></p>
+          <p><Link href="/">Back to site</Link></p>
+        </div>
+      </main>
+    );
+  }
+
+  if (!allowed) {
+    return (
+      <main style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', padding: 24, background: '#f6f7fb' }}>
+        <div style={{ maxWidth: 560, background: '#fff', padding: 24, borderRadius: 16, boxShadow: '0 1px 2px rgba(0,0,0,0.05)' }}>
+          <h1 style={{ marginTop: 0 }}>Request access first</h1>
+          <p>
+            LeadSprint account creation is reserved for invited or approved users. If you’re new here, start with the request-access flow so we can associate your account correctly.
+          </p>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            <Link href="/request-access">Request access</Link>
+            <Link href="/sign-in">Sign in</Link>
+          </div>
         </div>
       </main>
     );

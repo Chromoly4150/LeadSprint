@@ -2,6 +2,13 @@ import Link from 'next/link';
 import { SignIn } from '@clerk/nextjs';
 import { authScaffoldEnabled, getOnboardingRedirectUrl } from '../../../lib/auth/config';
 
+export const metadata = {
+  robots: {
+    index: false,
+    follow: false,
+  },
+};
+
 export default function SignInPage() {
   if (!authScaffoldEnabled) {
     return (

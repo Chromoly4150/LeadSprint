@@ -125,18 +125,30 @@ Every person should be in one of these states:
 
 ## Public Experience
 
+### Public website entry
+The public site should expose:
+- Home
+- About
+- Support / Contact
+- Request Access
+- Sign In
+
+It should **not** treat generic product sign-up as the main public CTA.
+
 ### Authentication entry
 Users should be able to:
 - Sign in with email/password
 - Sign in with Google
-- Create an account with email/password
-- Continue with Google for new account creation
+
+Account creation should be framed as a controlled path for:
+- approved users
+- invited users
 
 The auth page should remain simple and non-technical.
 
 Suggested framing:
 - "Sign in to LeadSprint"
-- "Create your account"
+- "Request access"
 
 ---
 
@@ -161,18 +173,22 @@ They should only gain access by:
 
 ## Public Onboarding Paths
 
-### Path 1: Individual workspace
-A user can choose to create an **individual workspace** for solo use.
+### Path 1: Individual workspace request
+A public visitor can request or begin setup for an **individual workspace** for solo use.
 
 ### Path 2: Verified business workspace request
-A user can request creation of a **verified business workspace**.
+A public visitor can request creation of a **verified business workspace**.
 This requires manual review.
 
 ### Not a public path in V1
 - public self-service joining of an existing org/workspace
+- generic unrestricted account sign-up as a public marketing CTA
 
 If a person works for a company that already uses LeadSprint, they should be told:
 - ask your workspace owner/admin for an invite
+
+If a person is not yet approved or invited, they should be directed to:
+- request access first
 
 ---
 

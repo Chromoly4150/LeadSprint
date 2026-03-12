@@ -62,6 +62,7 @@ For a temporary hosted environment, the minimum setup is:
 - deploy `apps/api` as a Node service
 - deploy `apps/web` as a Next.js app
 - set `NEXT_PUBLIC_API_BASE` for `apps/web` to the public URL of the API
+- set `NEXT_PUBLIC_APP_URL` for `apps/web` to the public URL of the web app
 - configure Clerk env vars for `apps/web`
 - configure the same `INTERNAL_API_AUTH_SECRET` in both `apps/web` and `apps/api`
 - initialize and seed the API database once before sharing access
@@ -71,8 +72,10 @@ Fastest current path:
 - copy values from `apps/api/.env.example` and `apps/web/.env.example`
 
 Core smoke test before sending to a partner:
+- verify the public landing page loads
+- verify Request Access and Sign In are both visible and distinct
+- verify generic `/sign-up` is not a normal public funnel
 - sign in with Clerk email/password or Google
-- verify unauthenticated users route to sign-in
 - verify authenticated but unprovisioned users route to onboarding/access status
 - open Dashboard successfully
 - open Leads and select a lead
