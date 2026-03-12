@@ -36,7 +36,7 @@ export default async function SettingsPage() {
     internalApiFetch<{ users: UserRow[] }>('/api/users'),
     internalApiFetch<{ providers: ProviderRow[] }>('/api/email/provider-settings'),
     internalApiFetch<{ actor: { id: string; email: string; role: string; status: string } }>('/api/me/permissions'),
-    internalApiFetch<{ requests: AccessRequestRow[] }>('/api/admin/access-requests'),
+    internalApiFetch<{ requests: AccessRequestRow[] }>('/api/admin/access-requests').catch(() => ({ requests: [] })),
   ]);
 
   let invitationsRes: { invitations: InvitationRow[] } | null = null;
@@ -47,7 +47,7 @@ export default async function SettingsPage() {
     workspaceType = access.workspace?.workspaceType || null;
     orgIdForInvites = access.workspace?.workspaceType === 'business_verified' ? access.workspace.id : null;
     if (orgIdForInvites) {
-      invitationsRes = await internalApiFetch<{ invitations: InvitationRow[] }>(`/api/organizations/${orgIdForInvites}/invitations`);
+      invitationsRes = await internalApiFetch<{ invitations: InvitationRow[] }>(`/api/organizations/${orgIdForInvites}/invitations`).catch(() => ({ invitations: [] }));
     }
   } catch {
     invitationsRes = null;

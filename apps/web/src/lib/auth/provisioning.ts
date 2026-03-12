@@ -19,11 +19,15 @@ export async function getProvisioningState(): Promise<ProvisioningState> {
   const currentUser = await getCurrentAuthUser();
   if (!currentUser) return { state: 'signed_out' };
 
-  const res = await internalApiFetch<any>('/api/access/me');
-  if (res.state === 'approved') return { state: 'approved', workspace: res.workspace, user: res.user };
-  if (res.state === 'pending') return { state: 'pending', request: res.request, invitations: res.invitations || [] };
-  if (res.state === 'needs_follow_up') return { state: 'needs_follow_up', request: res.request, invitations: res.invitations || [] };
-  if (res.state === 'rejected') return { state: 'rejected', request: res.request, invitations: res.invitations || [] };
-  if (res.state === 'invited') return { state: 'invited', invitations: res.invitations || [] };
-  return { state: 'authenticated_not_onboarded' };
+  try {
+    const res = await internalApiFetch<any>('/api/access/me');
+    if (res.state === 'approved') return { state: 'approved', workspace: res.workspace, user: res.user };
+    if (res.state === 'pending') return { state: 'pending', request: res.request, invitations: res.invitations || [] };
+    if (res.state === 'needs_follow_up') return { state: 'needs_follow_up', request: res.request, invitations: res.invitations || [] };
+    if (res.state === 'rejected') return { state: 'rejected', request: res.request, invitations: res.invitations || [] };
+    if (res.state === 'invited') return { state: 'invited', invitations: res.invitations || [] };
+    return { state: 'authenticated_not_onboarded' };
+  } catch {
+    return { state: 'authenticated_not_onboarded' };
+  }
 }
