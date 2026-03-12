@@ -6,6 +6,7 @@ const nav = [
   { href: '/inbox', label: 'Inbox' },
   { href: '/reports', label: 'Reports' },
   { href: '/settings', label: 'Settings' },
+  { href: '/onboarding', label: 'Onboarding' },
 ];
 
 export function AppShell({ title, subtitle, children }: { title: string; subtitle?: string; children: React.ReactNode }) {
