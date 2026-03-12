@@ -491,6 +491,7 @@ app.get('/health', (_req, res) => res.json({ ok: true }));
 app.get('/api/access/me', requireIdentity, (req, res) => {
   const workspace = getWorkspaceByIdentity(req.identity);
   const pendingRequest = db.prepare(`SELECT id, organization_name, status, created_at, updated_at, role_title, line_of_business, notes FROM access_requests WHERE clerk_user_id = ? ORDER BY created_at DESC LIMIT 1`).get(req.identity.clerkUserId);
+  const pendingInvitations = db.prepare(`SELECT i.id, i.organization_id, i.email, i.role, i.status, i.created_at, o.name AS organization_name FROM user_invitations i JOIN organizations o ON o.id = i.organization_id WHERE lower(i.email) = ? AND i.status = 'pending' ORDER BY i.created_at DESC`).all(req.identity.email);
 
   if (workspace) {
     return res.json({
@@ -523,7 +524,12 @@ app.get('/api/access/me', requireIdentity, (req, res) => {
         createdAt: pendingRequest.created_at,
         updatedAt: pendingRequest.updated_at,
       },
+      invitations: pendingInvitations,
     });
+  }
+
+  if (pendingInvitations.length > 0) {
+    return res.json({ ok: true, state: 'invited', invitations: pendingInvitations });
   }
 
   return res.json({ ok: true, state: 'authenticated_not_onboarded' });
