@@ -180,6 +180,10 @@ function normalizeString(v) {
   return v.trim();
 }
 
+function normalizePhoneDigits(value) {
+  return normalizeString(value).replace(/\D/g, '');
+}
+
 function validateLead(payload) {
   const fullName = normalizeString(payload?.fullName || payload?.name);
   const email = normalizeString(payload?.email).toLowerCase();
@@ -206,6 +210,38 @@ function validateLead(payload) {
       message: message || null,
       urgencyStatus,
     },
+  };
+}
+
+function findLeadDuplicates({ fullName, email, phone }) {
+  const rows = db.prepare(`SELECT id, full_name, email, phone, source, status, urgency_status, received_at FROM leads WHERE organization_id = ? ORDER BY received_at DESC`).all(DEFAULT_ORG_ID);
+  const nameKey = normalizeString(fullName).toLowerCase();
+  const emailKey = normalizeString(email).toLowerCase();
+  const phoneKey = normalizePhoneDigits(phone);
+
+  const matches = rows.flatMap((row) => {
+    const matchedOn = [];
+    if (emailKey && normalizeString(row.email).toLowerCase() === emailKey) matchedOn.push('email');
+    if (phoneKey && normalizePhoneDigits(row.phone) === phoneKey) matchedOn.push('phone');
+    if (nameKey && normalizeString(row.full_name).toLowerCase() === nameKey && ((emailKey && normalizeString(row.email).toLowerCase() === emailKey) || (phoneKey && normalizePhoneDigits(row.phone) === phoneKey))) matchedOn.push('name_plus_contact');
+    if (!matchedOn.length) return [];
+    return [{
+      id: row.id,
+      fullName: row.full_name,
+      email: row.email,
+      phone: row.phone,
+      source: row.source,
+      status: row.status,
+      urgencyStatus: row.urgency_status,
+      receivedAt: row.received_at,
+      matchedOn,
+    }];
+  });
+
+  return {
+    isDuplicate: matches.length > 0,
+    reason: matches.length ? `Matched existing lead by ${matches[0].matchedOn.join(', ')}.` : null,
+    matches,
   };
 }
 
@@ -524,6 +560,11 @@ app.post('/api/leads/intake', (req, res) => {
   const validated = validateLead(req.body || {});
   if (!validated.ok) return res.status(400).json({ ok: false, errors: validated.errors });
 
+  const duplicate = findLeadDuplicates(validated.data);
+  if (duplicate.isDuplicate) {
+    return res.status(409).json({ ok: false, error: 'Duplicate lead detected', duplicate });
+  }
+
   const leadId = `lead_${crypto.randomUUID()}`;
   const eventId = `evt_${crypto.randomUUID()}`;
   const ts = nowIso();
@@ -556,6 +597,15 @@ app.post('/api/leads/intake', (req, res) => {
   tx();
 
   res.status(201).json({ ok: true, lead: { id: leadId, status: 'new', receivedAt: ts, ...validated.data } });
+});
+
+app.post('/api/leads/duplicates', requirePermission('leads.view'), (req, res) => {
+  const duplicate = findLeadDuplicates({
+    fullName: req.body?.fullName || req.body?.name,
+    email: req.body?.email,
+    phone: req.body?.phone,
+  });
+  res.json({ ok: true, duplicate });
 });
 
 app.get('/api/leads', (req, res) => {
