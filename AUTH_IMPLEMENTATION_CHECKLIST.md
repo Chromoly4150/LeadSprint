@@ -7,19 +7,25 @@ This checklist follows the current product decisions:
 - Clerk for auth
 - V1 auth methods: email/password + Google
 - authenticated users do not get app access automatically
-- users must go through request/access provisioning
-- users may request either:
-  - create a new org
-  - join an existing org
+- onboarding supports:
+  - individual workspace creation
+  - verified business workspace requests
+- existing org/team members do not self-join publicly
+- only verified business workspaces can invite/add users
 
 ---
 
 ## Phase 0 — Freeze scope
 - [ ] Review and accept `AUTH_SPEC.md`
 - [ ] Confirm V1 auth methods: email/password + Google
-- [ ] Confirm onboarding model: auth first, provisioning second
-- [ ] Confirm request types: create org / join org
-- [ ] Confirm manual approval in V1
+- [ ] Confirm workspace classes:
+  - [ ] individual
+  - [ ] business_verified
+- [ ] Confirm business verification rule:
+  - [ ] verify business exists
+  - [ ] verify requester is authorized to act on behalf of business
+- [ ] Confirm employee/team-member onboarding rule: invite-only
+- [ ] Confirm manual approval in V1 for business workspaces
 
 ---
 
@@ -47,21 +53,29 @@ This checklist follows the current product decisions:
 - [ ] Add migration to `users` table:
   - [ ] `clerk_user_id TEXT UNIQUE NULL`
 
-### Access requests table
-- [ ] Add migration for `access_requests`
+### Organizations / workspace metadata
+- [ ] Add workspace/org type support if not already present
+  - [ ] `workspace_type` or equivalent
+  - expected values:
+    - [ ] `individual`
+    - [ ] `business_verified`
+
+### Business workspace requests table
+- [ ] Add migration for `access_requests` or `business_workspace_requests`
 
 Suggested fields:
 - [ ] `id`
 - [ ] `clerk_user_id`
 - [ ] `email`
 - [ ] `full_name`
+- [ ] `role_title`
 - [ ] `organization_name`
-- [ ] `request_type`
-- [ ] `target_org_id` nullable
-- [ ] `target_org_name` nullable
+- [ ] `website`
 - [ ] `line_of_business`
 - [ ] `requested_features_json`
 - [ ] `team_size`
+- [ ] `authority_attestation`
+- [ ] `verification_notes` or `verification_materials_json`
 - [ ] `notes`
 - [ ] `status`
 - [ ] `review_notes`
@@ -69,6 +83,21 @@ Suggested fields:
 - [ ] `reviewed_at`
 - [ ] `created_at`
 - [ ] `updated_at`
+
+### Invitation table (if not already present)
+- [ ] add user invitation model/table for future or immediate use
+
+Suggested fields:
+- [ ] `id`
+- [ ] `organization_id`
+- [ ] `email`
+- [ ] `role`
+- [ ] `status`
+- [ ] `invited_by_user_id`
+- [ ] `accepted_by_user_id` nullable
+- [ ] `created_at`
+- [ ] `updated_at`
+- [ ] `expires_at` optional
 
 ### Optional indexes / constraints
 - [ ] index `clerk_user_id`
@@ -99,9 +128,10 @@ Suggested fields:
 - [ ] Define user states in code:
   - [ ] unauthenticated
   - [ ] authenticated_not_onboarded
-  - [ ] pending
-  - [ ] needs_follow_up
-  - [ ] rejected
+  - [ ] individual_ready
+  - [ ] business_request_pending
+  - [ ] business_request_needs_follow_up
+  - [ ] business_request_rejected
   - [ ] approved
 - [ ] Route users based on those states
 
@@ -111,37 +141,42 @@ Suggested fields:
 
 ---
 
-## Phase 5 — Onboarding / access-request UI
-- [ ] Build onboarding request page
-- [ ] Build branching choice:
-  - [ ] create new org
-  - [ ] join existing org
-- [ ] Build create-org request fields
-- [ ] Build join-org request fields
+## Phase 5 — Onboarding UI
+- [ ] Build onboarding choice page
+- [ ] Add path for:
+  - [ ] create individual workspace
+  - [ ] request verified business workspace
+- [ ] Add clear messaging that joining an existing business workspace requires an invite
+- [ ] Build individual workspace setup form
+- [ ] Build verified business request form
 - [ ] Build submission confirmation page
 - [ ] Build pending status page
 - [ ] Build needs-follow-up page
 - [ ] Build rejected page
 
 ### Routes/pages likely
-- [ ] `/request-access`
+- [ ] `/onboarding`
+- [ ] `/onboarding/individual`
+- [ ] `/onboarding/business`
 - [ ] `/pending-access`
 - [ ] `/access-status`
 
 ---
 
-## Phase 6 — Onboarding / access-request API endpoints
+## Phase 6 — Onboarding / provisioning API endpoints
 
 ### Authenticated but unprovisioned endpoints
 These should be usable by Clerk-authenticated users even if they are not yet full LeadSprint users.
 
 - [ ] `GET /api/access/me`
   - returns provisioning/request status for current Clerk user
-- [ ] `POST /api/access/request`
-  - create or submit request
-- [ ] `PATCH /api/access/request/:id`
+- [ ] `POST /api/access/individual`
+  - creates individual workspace + owner user
+- [ ] `POST /api/access/business-request`
+  - create or submit verified business workspace request
+- [ ] `PATCH /api/access/business-request/:id`
   - update editable request fields before final review (optional if useful)
-- [ ] `GET /api/access/request/:id`
+- [ ] `GET /api/access/business-request/:id`
   - fetch request details/status
 
 ### API changes
@@ -150,32 +185,57 @@ These should be usable by Clerk-authenticated users even if they are not yet ful
 
 ---
 
-## Phase 7 — Admin review / provisioning endpoints
+## Phase 7 — Admin review / business provisioning endpoints
 - [ ] `GET /api/admin/access-requests`
 - [ ] `GET /api/admin/access-requests/:id`
-- [ ] `POST /api/admin/access-requests/:id/approve-create-org`
-- [ ] `POST /api/admin/access-requests/:id/approve-join-org`
+- [ ] `POST /api/admin/access-requests/:id/approve-business`
 - [ ] `POST /api/admin/access-requests/:id/reject`
 - [ ] `POST /api/admin/access-requests/:id/needs-follow-up`
 
 ### Approval logic
-#### Create org approval
+#### Individual workspace creation
+- [ ] create individual workspace
+- [ ] create LeadSprint user
+- [ ] assign role `owner`
+- [ ] attach `clerk_user_id`
+- [ ] mark workspace type `individual`
+- [ ] enforce no-user-invite restriction
+
+#### Verified business approval
+- [ ] confirm business exists
+- [ ] confirm requester is authorized to act for business
 - [ ] create organization
 - [ ] create LeadSprint user
 - [ ] assign role `owner`
 - [ ] attach `clerk_user_id`
-- [ ] mark request approved
-
-#### Join org approval
-- [ ] identify target org
-- [ ] create or attach LeadSprint user
-- [ ] assign role
-- [ ] attach `clerk_user_id`
+- [ ] mark workspace type `business_verified`
 - [ ] mark request approved
 
 ---
 
-## Phase 8 — Web → API trusted identity bridge
+## Phase 8 — Invitation flow for verified business workspaces
+
+### V1 minimum
+- [ ] owners/admins can invite a single user by email
+- [ ] invited user can authenticate with Clerk and be attached to the org
+
+### V1.1 / later
+- [ ] bulk invite by pasted emails
+- [ ] CSV/spreadsheet import
+
+### Invitation endpoints / routes
+- [ ] `POST /api/organizations/:id/invitations`
+- [ ] `GET /api/organizations/:id/invitations`
+- [ ] `POST /api/invitations/:id/accept`
+
+### Enforcement rules
+- [ ] only `business_verified` workspaces can invite users
+- [ ] individual workspaces cannot invite/add users
+- [ ] owners/admins can invite users
+
+---
+
+## Phase 9 — Web → API trusted identity bridge
 - [ ] Create internal signed request helper in web
 - [ ] Sign requests with `INTERNAL_API_AUTH_SECRET`
 - [ ] Include trusted identity headers such as:
@@ -191,7 +251,7 @@ These should be usable by Clerk-authenticated users even if they are not yet ful
 
 ---
 
-## Phase 9 — Replace fake owner auth
+## Phase 10 — Replace fake owner auth
 - [ ] Remove hardcoded `owner@leadsprint.local` fallback from web fetches
 - [ ] Remove hardcoded owner injection from server actions
 - [ ] Update API actor resolution away from arbitrary `x-user-email`
@@ -204,7 +264,7 @@ These should be usable by Clerk-authenticated users even if they are not yet ful
 
 ---
 
-## Phase 10 — App route protection
+## Phase 11 — App route protection
 - [ ] Protect `/dashboard`
 - [ ] Protect `/leads`
 - [ ] Protect `/inbox`
@@ -214,44 +274,47 @@ These should be usable by Clerk-authenticated users even if they are not yet ful
 
 ---
 
-## Phase 11 — Authorization audit
+## Phase 12 — Authorization audit
 - [ ] Audit all API endpoints for correct auth level
 
 ### Categories to verify
 - [ ] public unauthenticated endpoints
 - [ ] authenticated-but-unprovisioned endpoints
-- [ ] fully provisioned user endpoints
+- [ ] provisioned individual workspace endpoints
+- [ ] provisioned verified-business endpoints
 - [ ] admin-only endpoints
 
-### Specific audit goal
+### Specific audit goals
 - [ ] no sensitive route should rely on raw user email headers in production
+- [ ] individual workspaces cannot invite/manage users
+- [ ] only verified business workspaces can manage team invites
 
 ---
 
-## Phase 12 — Minimal admin workflow surface
+## Phase 13 — Minimal admin workflow surface
 Choose one for initial implementation:
 - [ ] rough admin UI inside app
 - [ ] internal-only page
 - [ ] admin script / CLI flow
 
 ### Minimum capability required
-- [ ] view requests
-- [ ] approve create-org
-- [ ] approve join-org
+- [ ] view business requests
+- [ ] approve verified business workspace
 - [ ] reject
 - [ ] mark needs follow-up
 
 ---
 
-## Phase 13 — UX polish
+## Phase 14 — UX polish
 - [ ] current-user display in app shell
 - [ ] logout control
 - [ ] humane messaging for pending/rejected/follow-up states
+- [ ] humane messaging for invited-user flow
 - [ ] avoid generic crashes for access-state mismatches
 
 ---
 
-## Phase 14 — Render / deployment updates
+## Phase 15 — Render / deployment updates
 ### Web env vars
 - [ ] add Clerk publishable key
 - [ ] add Clerk secret key
@@ -266,16 +329,20 @@ Choose one for initial implementation:
 
 ---
 
-## Phase 15 — Validation checklist
+## Phase 16 — Validation checklist
 - [ ] Email/password sign-up works
 - [ ] Email/password sign-in works
 - [ ] Google sign-in works
 - [ ] Authenticated new user lands in onboarding flow
-- [ ] Create-org request can be submitted
-- [ ] Join-org request can be submitted
+- [ ] Individual workspace creation works
+- [ ] Verified business request can be submitted
 - [ ] Pending state renders correctly
-- [ ] Admin approval creates correct org/user mapping
-- [ ] Approved user reaches app successfully
+- [ ] Business approval creates correct org/user mapping
+- [ ] Approved verified business owner reaches app successfully
+- [ ] Individual workspace reaches app successfully
+- [ ] Individual workspace cannot invite/add users
+- [ ] Verified business workspace can invite users
+- [ ] Invited user can authenticate and join workspace
 - [ ] Existing permissions still work after provisioning
 - [ ] Hardcoded owner auth path is no longer used in production flow
 
@@ -285,10 +352,12 @@ Choose one for initial implementation:
 1. Clerk setup
 2. schema changes
 3. web auth integration
-4. onboarding request model and pages
-5. provisioning status APIs
-6. admin approval path
-7. trusted web→API bridge
-8. remove fake owner auth
-9. route/access audit
-10. Render deployment update
+4. onboarding model and pages
+5. individual workspace creation flow
+6. business request flow
+7. admin approval path
+8. invitation flow for verified business workspaces
+9. trusted web→API bridge
+10. remove fake owner auth
+11. route/access audit
+12. Render deployment update
