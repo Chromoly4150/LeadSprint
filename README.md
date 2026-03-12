@@ -58,10 +58,14 @@ Current partner-testable routes in `apps/web`:
 - `/settings`
 
 For a temporary hosted environment, the minimum setup is:
-- deploy `apps/api` as a Node service exposing port `4000`
-- deploy `apps/web` as a Next.js app exposing port `3000`
+- deploy `apps/api` as a Node service
+- deploy `apps/web` as a Next.js app
 - set `NEXT_PUBLIC_API_BASE` for `apps/web` to the public URL of the API
 - initialize and seed the API database once before sharing access
+
+Fastest current path:
+- use `render.yaml` at the repo root as the temporary deployment blueprint
+- copy values from `apps/api/.env.example` and `apps/web/.env.example`
 
 Core smoke test before sending to a partner:
 - open Dashboard successfully

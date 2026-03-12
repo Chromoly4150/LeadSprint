@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: leadsprint-api
+    runtime: node
+    rootDir: apps/api
+    buildCommand: npm install
+    startCommand: npm run db:init && npm run db:seed && npm run dev
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: DEFAULT_ORG_ID
+        value: org_default
+      - key: DEFAULT_ORG_NAME
+        value: LeadSprint Demo Org
+      - key: APP_BASE_URL
+        value: https://leadsprint-web.onrender.com
+
+  - type: web
+    name: leadsprint-web
+    runtime: node
+    rootDir: apps/web
+    buildCommand: npm install && npm run build
+    startCommand: npm run start -- --hostname 0.0.0.0 --port $PORT
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: NEXT_PUBLIC_API_BASE
+        value: https://leadsprint-api.onrender.com
