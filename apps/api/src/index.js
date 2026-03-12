@@ -716,6 +716,18 @@ app.post('/api/organizations/:id/invitations', requirePermission('team.manageUse
   res.status(201).json({ ok: true, invitation });
 });
 
+app.post('/api/invitations/:id/revoke', requirePermission('team.manageUsers'), (req, res) => {
+  const invitation = db.prepare(`SELECT * FROM user_invitations WHERE id = ? LIMIT 1`).get(req.params.id);
+  if (!invitation) return res.status(404).json({ ok: false, error: 'Invitation not found' });
+  if (invitation.organization_id !== req.actor.organization_id) {
+    return res.status(403).json({ ok: false, error: 'Cannot revoke invitations for another organization' });
+  }
+  if (invitation.status !== 'pending') return res.status(409).json({ ok: false, error: 'Only pending invitations can be revoked' });
+  const ts = nowIso();
+  db.prepare(`UPDATE user_invitations SET status = 'revoked', updated_at = ? WHERE id = ?`).run(ts, invitation.id);
+  res.json({ ok: true, invitation: { ...invitation, status: 'revoked', updated_at: ts } });
+});
+
 app.post('/api/invitations/:id/accept', requireIdentity, (req, res) => {
   const invitation = db.prepare(`SELECT * FROM user_invitations WHERE id = ? LIMIT 1`).get(req.params.id);
   if (!invitation) return res.status(404).json({ ok: false, error: 'Invitation not found' });

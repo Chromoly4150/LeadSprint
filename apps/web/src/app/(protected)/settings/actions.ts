@@ -53,6 +53,16 @@ export async function createInvitationAction(formData: FormData) {
   redirect('/settings');
 }
 
+export async function revokeInvitationAction(formData: FormData) {
+  const invitationId = String(formData.get('invitationId') || '').trim();
+  if (!invitationId) return;
+  await internalApiFetch(`/api/invitations/${invitationId}/revoke`, {
+    method: 'POST',
+  });
+  revalidatePath('/settings');
+  redirect('/settings');
+}
+
 export async function bootstrapGmailProviderAction() {
   await internalApiFetch('/api/email/providers/gmail/bootstrap', {
     method: 'POST',

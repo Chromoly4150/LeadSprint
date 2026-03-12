@@ -7,6 +7,7 @@ import {
   createInvitationAction,
   followUpBusinessRequestAction,
   rejectBusinessRequestAction,
+  revokeInvitationAction,
   startGmailOAuthAction,
 } from './actions';
 
@@ -105,12 +106,16 @@ export default async function SettingsPage() {
 
       <section style={{ ...cardStyle, marginTop: 16 }}>
         <h2 style={{ marginTop: 0 }}>Business access requests</h2>
-        <div style={{ display: 'grid', gap: 12 }}>
-          {requestsRes.requests.length === 0 ? (
-            <p style={{ margin: 0, color: '#6b7280' }}>No business access requests yet.</p>
-          ) : (
-            requestsRes.requests.map((request) => (
-              <div key={request.id} style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 12, display: 'grid', gap: 10 }}>
+        <div style={{ display: 'grid', gap: 16 }}>
+          {['pending', 'needs_follow_up', 'approved', 'rejected'].map((statusKey) => {
+            const rows = requestsRes.requests.filter((request) => request.status === statusKey);
+            return (
+              <div key={statusKey} style={{ display: 'grid', gap: 12 }}>
+                <h3 style={{ margin: 0, textTransform: 'capitalize' }}>{statusKey.replaceAll('_', ' ')}</h3>
+                {rows.length === 0 ? (
+                  <p style={{ margin: 0, color: '#6b7280' }}>No {statusKey.replaceAll('_', ' ')} requests.</p>
+                ) : rows.map((request) => (
+                  <div key={request.id} style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 12, display: 'grid', gap: 10 }}>
                 <div>
                   <div style={{ fontWeight: 700 }}>{request.organization_name}</div>
                   <div style={{ color: '#6b7280', fontSize: 13 }}>{request.full_name} · {request.email}</div>
@@ -168,9 +173,15 @@ export default async function SettingsPage() {
                 <p style={{ margin: 0, color: '#6b7280' }}>No invitations yet.</p>
               ) : (
                 invitationsRes!.invitations.map((invitation) => (
-                  <div key={invitation.id} style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 12 }}>
+                  <div key={invitation.id} style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 12, display: 'grid', gap: 8 }}>
                     <div style={{ fontWeight: 700 }}>{invitation.email}</div>
                     <div style={{ color: '#6b7280', fontSize: 12 }}>{invitation.role} · {invitation.status} · {invitation.created_at}</div>
+                    {invitation.status === 'pending' ? (
+                      <form action={revokeInvitationAction}>
+                        <input type="hidden" name="invitationId" value={invitation.id} />
+                        <button type="submit">Revoke invite</button>
+                      </form>
+                    ) : null}
                   </div>
                 ))
               )}
