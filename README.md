@@ -48,6 +48,30 @@ Then open:
 - UI: `http://127.0.0.1:3000`
 - API: `http://127.0.0.1:4000`
 
+## Temporary hosting / partner-test checklist
+
+Current partner-testable routes in `apps/web`:
+- `/dashboard`
+- `/leads`
+- `/inbox`
+- `/reports`
+- `/settings`
+
+For a temporary hosted environment, the minimum setup is:
+- deploy `apps/api` as a Node service exposing port `4000`
+- deploy `apps/web` as a Next.js app exposing port `3000`
+- set `NEXT_PUBLIC_API_BASE` for `apps/web` to the public URL of the API
+- initialize and seed the API database once before sharing access
+
+Core smoke test before sending to a partner:
+- open Dashboard successfully
+- open Leads and select a lead
+- add a note
+- log a communication
+- create an email draft
+- queue an outbox item
+- open Inbox and verify the thread appears
+
 ## Key docs
 
 - `docs/project-memory.md`
