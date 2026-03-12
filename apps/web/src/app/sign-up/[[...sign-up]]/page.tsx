@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { SignUp } from '@clerk/nextjs';
-import { authScaffoldEnabled } from '../../../lib/auth/config';
+import { authScaffoldEnabled, getOnboardingRedirectUrl } from '../../../lib/auth/config';
 
 export default function SignUpPage() {
   if (!authScaffoldEnabled) {
@@ -17,7 +17,7 @@ export default function SignUpPage() {
 
   return (
     <main style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', padding: 24, background: '#f6f7fb' }}>
-      <SignUp signInUrl="/sign-in" forceRedirectUrl="/onboarding" />
+      <SignUp signInUrl="/sign-in" forceRedirectUrl={getOnboardingRedirectUrl()} fallbackRedirectUrl={getOnboardingRedirectUrl()} />
     </main>
   );
 }

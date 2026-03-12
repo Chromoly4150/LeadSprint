@@ -3,9 +3,11 @@ import { WorkspaceBadge } from '../../../components/workspace-badge';
 import { internalApiFetch } from '../../../lib/api/internal-api';
 import {
   approveBusinessRequestAction,
+  bootstrapGmailProviderAction,
   createInvitationAction,
   followUpBusinessRequestAction,
   rejectBusinessRequestAction,
+  startGmailOAuthAction,
 } from './actions';
 
 type UserRow = { id: string; fullName: string; email: string; role: string; status?: string };
@@ -81,10 +83,20 @@ export default async function SettingsPage() {
           <h2 style={{ marginTop: 0 }}>Email providers</h2>
           <div style={{ display: 'grid', gap: 10 }}>
             {providersRes.providers.map((provider) => (
-              <div key={provider.key} style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 12 }}>
+              <div key={provider.key} style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 12, display: 'grid', gap: 8 }}>
                 <div style={{ fontWeight: 700 }}>{provider.label}</div>
                 <div style={{ color: '#6b7280', fontSize: 13 }}>status: {provider.status}{provider.needsAuth ? ' · requires auth' : ''}</div>
                 <div style={{ color: '#6b7280', fontSize: 12 }}>updated: {provider.updatedAt || '—'}</div>
+                {provider.key === 'gmail' ? (
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <form action={bootstrapGmailProviderAction}>
+                      <button type="submit">Bootstrap Gmail</button>
+                    </form>
+                    <form action={startGmailOAuthAction}>
+                      <button type="submit">Start Gmail OAuth</button>
+                    </form>
+                  </div>
+                ) : null}
               </div>
             ))}
           </div>

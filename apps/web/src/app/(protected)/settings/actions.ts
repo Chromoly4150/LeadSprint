@@ -52,3 +52,16 @@ export async function createInvitationAction(formData: FormData) {
   revalidatePath('/settings');
   redirect('/settings');
 }
+
+export async function bootstrapGmailProviderAction() {
+  await internalApiFetch('/api/email/providers/gmail/bootstrap', {
+    method: 'POST',
+  });
+  revalidatePath('/settings');
+  redirect('/settings');
+}
+
+export async function startGmailOAuthAction() {
+  const res = await internalApiFetch<{ authUrl: string }>('/api/auth/gmail/start');
+  redirect(res.authUrl);
+}
