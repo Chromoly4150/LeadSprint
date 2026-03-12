@@ -2,21 +2,10 @@
 
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
-import { API_BASE } from '../../../lib/api';
-
-const USER_EMAIL = 'owner@leadsprint.local';
+import { internalApiFetch } from '../../../lib/api/internal-api';
 
 async function apiMutation(path: string, init: RequestInit) {
-  const headers = new Headers(init.headers || {});
-  if (!headers.has('Content-Type') && init.body) headers.set('Content-Type', 'application/json');
-  if (!headers.has('x-user-email')) headers.set('x-user-email', USER_EMAIL);
-
-  const res = await fetch(`${API_BASE}${path}`, { ...init, headers, cache: 'no-store' });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text || `Request failed: ${res.status}`);
-  }
-  return res.json();
+  return internalApiFetch(path, init);
 }
 
 export async function updateLeadStatusAction(formData: FormData) {
