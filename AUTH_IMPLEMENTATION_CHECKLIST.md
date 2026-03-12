@@ -1,0 +1,294 @@
+# LeadSprint Auth Implementation Checklist
+
+## Goal
+Implement Clerk-based authentication plus gated onboarding/provisioning for LeadSprint.
+
+This checklist follows the current product decisions:
+- Clerk for auth
+- V1 auth methods: email/password + Google
+- authenticated users do not get app access automatically
+- users must go through request/access provisioning
+- users may request either:
+  - create a new org
+  - join an existing org
+
+---
+
+## Phase 0 — Freeze scope
+- [ ] Review and accept `AUTH_SPEC.md`
+- [ ] Confirm V1 auth methods: email/password + Google
+- [ ] Confirm onboarding model: auth first, provisioning second
+- [ ] Confirm request types: create org / join org
+- [ ] Confirm manual approval in V1
+
+---
+
+## Phase 1 — Clerk platform setup
+- [ ] Create Clerk application/project
+- [ ] Enable email/password auth in Clerk
+- [ ] Enable Google auth in Clerk
+- [ ] Configure local development URLs
+- [ ] Configure Render production URLs
+- [ ] Record required Clerk environment variables
+
+### Expected env vars (web)
+- [ ] `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`
+- [ ] `CLERK_SECRET_KEY`
+
+### Internal bridge env vars
+- [ ] `INTERNAL_API_AUTH_SECRET` in web
+- [ ] `INTERNAL_API_AUTH_SECRET` in api
+
+---
+
+## Phase 2 — Database schema changes
+
+### Users table
+- [ ] Add migration to `users` table:
+  - [ ] `clerk_user_id TEXT UNIQUE NULL`
+
+### Access requests table
+- [ ] Add migration for `access_requests`
+
+Suggested fields:
+- [ ] `id`
+- [ ] `clerk_user_id`
+- [ ] `email`
+- [ ] `full_name`
+- [ ] `organization_name`
+- [ ] `request_type`
+- [ ] `target_org_id` nullable
+- [ ] `target_org_name` nullable
+- [ ] `line_of_business`
+- [ ] `requested_features_json`
+- [ ] `team_size`
+- [ ] `notes`
+- [ ] `status`
+- [ ] `review_notes`
+- [ ] `reviewed_by_user_id`
+- [ ] `reviewed_at`
+- [ ] `created_at`
+- [ ] `updated_at`
+
+### Optional indexes / constraints
+- [ ] index `clerk_user_id`
+- [ ] index `email`
+- [ ] index `status`
+
+---
+
+## Phase 3 — Clerk integration in web
+- [ ] Install Clerk packages in `apps/web`
+- [ ] Wrap app with Clerk provider
+- [ ] Add Clerk middleware / route protection entry point
+- [ ] Add sign-in route/page
+- [ ] Add sign-up route/page
+- [ ] Add sign-out flow
+
+### Files likely involved
+- [ ] `apps/web/src/app/layout.tsx`
+- [ ] `apps/web/src/middleware.ts` (or Clerk equivalent)
+- [ ] `apps/web/src/app/sign-in/[[...sign-in]]/page.tsx`
+- [ ] `apps/web/src/app/sign-up/[[...sign-up]]/page.tsx`
+
+---
+
+## Phase 4 — Provisioning status resolution
+- [ ] Create helper in web to get current Clerk user
+- [ ] Create helper to ask API for provisioning status
+- [ ] Define user states in code:
+  - [ ] unauthenticated
+  - [ ] authenticated_not_onboarded
+  - [ ] pending
+  - [ ] needs_follow_up
+  - [ ] rejected
+  - [ ] approved
+- [ ] Route users based on those states
+
+### New files likely
+- [ ] `apps/web/src/lib/auth/clerk-user.ts`
+- [ ] `apps/web/src/lib/auth/provisioning.ts`
+
+---
+
+## Phase 5 — Onboarding / access-request UI
+- [ ] Build onboarding request page
+- [ ] Build branching choice:
+  - [ ] create new org
+  - [ ] join existing org
+- [ ] Build create-org request fields
+- [ ] Build join-org request fields
+- [ ] Build submission confirmation page
+- [ ] Build pending status page
+- [ ] Build needs-follow-up page
+- [ ] Build rejected page
+
+### Routes/pages likely
+- [ ] `/request-access`
+- [ ] `/pending-access`
+- [ ] `/access-status`
+
+---
+
+## Phase 6 — Onboarding / access-request API endpoints
+
+### Authenticated but unprovisioned endpoints
+These should be usable by Clerk-authenticated users even if they are not yet full LeadSprint users.
+
+- [ ] `GET /api/access/me`
+  - returns provisioning/request status for current Clerk user
+- [ ] `POST /api/access/request`
+  - create or submit request
+- [ ] `PATCH /api/access/request/:id`
+  - update editable request fields before final review (optional if useful)
+- [ ] `GET /api/access/request/:id`
+  - fetch request details/status
+
+### API changes
+- [ ] Add onboarding-aware auth logic for authenticated-but-unprovisioned users
+- [ ] Support Clerk-backed identity even before app provisioning is complete
+
+---
+
+## Phase 7 — Admin review / provisioning endpoints
+- [ ] `GET /api/admin/access-requests`
+- [ ] `GET /api/admin/access-requests/:id`
+- [ ] `POST /api/admin/access-requests/:id/approve-create-org`
+- [ ] `POST /api/admin/access-requests/:id/approve-join-org`
+- [ ] `POST /api/admin/access-requests/:id/reject`
+- [ ] `POST /api/admin/access-requests/:id/needs-follow-up`
+
+### Approval logic
+#### Create org approval
+- [ ] create organization
+- [ ] create LeadSprint user
+- [ ] assign role `owner`
+- [ ] attach `clerk_user_id`
+- [ ] mark request approved
+
+#### Join org approval
+- [ ] identify target org
+- [ ] create or attach LeadSprint user
+- [ ] assign role
+- [ ] attach `clerk_user_id`
+- [ ] mark request approved
+
+---
+
+## Phase 8 — Web → API trusted identity bridge
+- [ ] Create internal signed request helper in web
+- [ ] Sign requests with `INTERNAL_API_AUTH_SECRET`
+- [ ] Include trusted identity headers such as:
+  - [ ] Clerk user id
+  - [ ] email
+  - [ ] timestamp
+  - [ ] signature
+- [ ] Add signature verification middleware in API
+
+### Likely files
+- [ ] `apps/web/src/lib/api/internal-api.ts`
+- [ ] `apps/api/src/internal-auth.js`
+
+---
+
+## Phase 9 — Replace fake owner auth
+- [ ] Remove hardcoded `owner@leadsprint.local` fallback from web fetches
+- [ ] Remove hardcoded owner injection from server actions
+- [ ] Update API actor resolution away from arbitrary `x-user-email`
+- [ ] Keep local dev fallback only behind an explicit env flag if needed
+
+### Files to change
+- [ ] `apps/web/src/lib/api.ts`
+- [ ] `apps/web/src/app/leads/actions.ts`
+- [ ] `apps/api/src/index.js`
+
+---
+
+## Phase 10 — App route protection
+- [ ] Protect `/dashboard`
+- [ ] Protect `/leads`
+- [ ] Protect `/inbox`
+- [ ] Protect `/reports`
+- [ ] Protect `/settings`
+- [ ] Ensure authenticated but unprovisioned users are redirected away from main app shell
+
+---
+
+## Phase 11 — Authorization audit
+- [ ] Audit all API endpoints for correct auth level
+
+### Categories to verify
+- [ ] public unauthenticated endpoints
+- [ ] authenticated-but-unprovisioned endpoints
+- [ ] fully provisioned user endpoints
+- [ ] admin-only endpoints
+
+### Specific audit goal
+- [ ] no sensitive route should rely on raw user email headers in production
+
+---
+
+## Phase 12 — Minimal admin workflow surface
+Choose one for initial implementation:
+- [ ] rough admin UI inside app
+- [ ] internal-only page
+- [ ] admin script / CLI flow
+
+### Minimum capability required
+- [ ] view requests
+- [ ] approve create-org
+- [ ] approve join-org
+- [ ] reject
+- [ ] mark needs follow-up
+
+---
+
+## Phase 13 — UX polish
+- [ ] current-user display in app shell
+- [ ] logout control
+- [ ] humane messaging for pending/rejected/follow-up states
+- [ ] avoid generic crashes for access-state mismatches
+
+---
+
+## Phase 14 — Render / deployment updates
+### Web env vars
+- [ ] add Clerk publishable key
+- [ ] add Clerk secret key
+- [ ] add internal API auth secret
+
+### API env vars
+- [ ] add internal API auth secret
+
+### Config verification
+- [ ] verify Clerk redirect URLs match Render domains
+- [ ] verify local development URLs match Clerk setup
+
+---
+
+## Phase 15 — Validation checklist
+- [ ] Email/password sign-up works
+- [ ] Email/password sign-in works
+- [ ] Google sign-in works
+- [ ] Authenticated new user lands in onboarding flow
+- [ ] Create-org request can be submitted
+- [ ] Join-org request can be submitted
+- [ ] Pending state renders correctly
+- [ ] Admin approval creates correct org/user mapping
+- [ ] Approved user reaches app successfully
+- [ ] Existing permissions still work after provisioning
+- [ ] Hardcoded owner auth path is no longer used in production flow
+
+---
+
+## Suggested implementation order
+1. Clerk setup
+2. schema changes
+3. web auth integration
+4. onboarding request model and pages
+5. provisioning status APIs
+6. admin approval path
+7. trusted web→API bridge
+8. remove fake owner auth
+9. route/access audit
+10. Render deployment update
