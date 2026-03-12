@@ -38,10 +38,11 @@ Core themes:
 (cd apps/web && npm install)
 
 # initialize + seed local API database
-(cd apps/api && npm run db:init && npm run db:seed)
+npm run api:db:init
+npm run api:db:seed
 
 # start API + web locally
-./scripts/dev.sh
+npm run dev
 ```
 
 Then open:
