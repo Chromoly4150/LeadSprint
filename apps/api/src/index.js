@@ -563,6 +563,122 @@ app.get('/api/me/permissions', requireAuthenticated, (req, res) => {
   });
 });
 
+app.get('/api/admin/access-requests', requirePermission('team.manageUsers'), (req, res) => {
+  const rows = db.prepare(`SELECT id, clerk_user_id, email, full_name, role_title, organization_name, website, line_of_business, requested_features_json, team_size, authority_attestation, notes, status, review_notes, reviewed_at, created_at, updated_at FROM access_requests ORDER BY created_at DESC`).all();
+  res.json({
+    ok: true,
+    requests: rows.map((row) => ({
+      ...row,
+      requested_features: safeJsonParse(row.requested_features_json, []),
+      authority_attestation: Boolean(row.authority_attestation),
+    })),
+  });
+});
+
+app.post('/api/admin/access-requests/:id/approve-business', requirePermission('team.manageUsers'), (req, res) => {
+  const request = db.prepare(`SELECT * FROM access_requests WHERE id = ? LIMIT 1`).get(req.params.id);
+  if (!request) return res.status(404).json({ ok: false, error: 'Request not found' });
+  if (request.status === 'approved') return res.json({ ok: true, alreadyApproved: true });
+
+  const fullName = normalizeString(request.full_name);
+  const email = normalizeString(request.email).toLowerCase();
+  const orgName = normalizeString(request.organization_name);
+  const ts = nowIso();
+
+  const existingUserByClerk = db.prepare(`SELECT * FROM users WHERE clerk_user_id = ? LIMIT 1`).get(request.clerk_user_id);
+  if (existingUserByClerk) {
+    return res.status(409).json({ ok: false, error: 'This Clerk identity is already linked to a user' });
+  }
+
+  const orgId = `org_${crypto.randomUUID()}`;
+  const userId = `usr_${crypto.randomUUID()}`;
+  const tx = db.transaction(() => {
+    db.prepare(`INSERT INTO organizations (id, name, timezone, workspace_type, created_at, updated_at) VALUES (?, ?, ?, 'business_verified', ?, ?)`).run(orgId, orgName, 'America/New_York', ts, ts);
+    db.prepare(`INSERT INTO users (id, organization_id, full_name, email, role, status, clerk_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, 'owner', 'active', ?, ?, ?)`).run(userId, orgId, fullName, email, request.clerk_user_id, ts, ts);
+    db.prepare(`INSERT INTO settings (id, organization_id, key, value_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`).run(`set_${crypto.randomUUID()}`, orgId, BUSINESS_SETTINGS_KEY, JSON.stringify({
+      businessName: orgName,
+      timezone: 'America/New_York',
+      lineOfBusiness: request.line_of_business || '',
+      bookingLink: 'https://calendly.com/your-link',
+      hours: defaultBusinessSettings.hours,
+    }), ts, ts);
+    db.prepare(`UPDATE access_requests SET status = 'approved', review_notes = ?, reviewed_by_user_id = ?, reviewed_at = ?, updated_at = ? WHERE id = ?`).run(normalizeString(req.body?.reviewNotes) || null, req.actor.id, ts, ts, request.id);
+  });
+
+  tx();
+  res.json({ ok: true, organization: { id: orgId, name: orgName, workspaceType: 'business_verified' }, user: { id: userId, email, role: 'owner' } });
+});
+
+app.post('/api/admin/access-requests/:id/reject', requirePermission('team.manageUsers'), (req, res) => {
+  const request = db.prepare(`SELECT * FROM access_requests WHERE id = ? LIMIT 1`).get(req.params.id);
+  if (!request) return res.status(404).json({ ok: false, error: 'Request not found' });
+  const ts = nowIso();
+  db.prepare(`UPDATE access_requests SET status = 'rejected', review_notes = ?, reviewed_by_user_id = ?, reviewed_at = ?, updated_at = ? WHERE id = ?`).run(normalizeString(req.body?.reviewNotes) || null, req.actor.id, ts, ts, request.id);
+  res.json({ ok: true, request: { id: request.id, status: 'rejected', reviewedAt: ts } });
+});
+
+app.post('/api/admin/access-requests/:id/needs-follow-up', requirePermission('team.manageUsers'), (req, res) => {
+  const request = db.prepare(`SELECT * FROM access_requests WHERE id = ? LIMIT 1`).get(req.params.id);
+  if (!request) return res.status(404).json({ ok: false, error: 'Request not found' });
+  const ts = nowIso();
+  db.prepare(`UPDATE access_requests SET status = 'needs_follow_up', review_notes = ?, reviewed_by_user_id = ?, reviewed_at = ?, updated_at = ? WHERE id = ?`).run(normalizeString(req.body?.reviewNotes) || null, req.actor.id, ts, ts, request.id);
+  res.json({ ok: true, request: { id: request.id, status: 'needs_follow_up', reviewedAt: ts } });
+});
+
+app.get('/api/organizations/:id/invitations', requirePermission('team.manageUsers'), (req, res) => {
+  if (req.actor.organization_id !== req.params.id) return res.status(403).json({ ok: false, error: 'Cannot view invitations for another organization' });
+  const org = db.prepare(`SELECT * FROM organizations WHERE id = ? LIMIT 1`).get(req.params.id);
+  if (!org) return res.status(404).json({ ok: false, error: 'Organization not found' });
+  if (org.workspace_type !== 'business_verified') return res.status(403).json({ ok: false, error: 'Only verified business workspaces can invite users' });
+
+  const invitations = db.prepare(`SELECT * FROM user_invitations WHERE organization_id = ? ORDER BY created_at DESC`).all(req.params.id);
+  res.json({ ok: true, invitations });
+});
+
+app.post('/api/organizations/:id/invitations', requirePermission('team.manageUsers'), (req, res) => {
+  if (req.actor.organization_id !== req.params.id) return res.status(403).json({ ok: false, error: 'Cannot invite into another organization' });
+  const org = db.prepare(`SELECT * FROM organizations WHERE id = ? LIMIT 1`).get(req.params.id);
+  if (!org) return res.status(404).json({ ok: false, error: 'Organization not found' });
+  if (org.workspace_type !== 'business_verified') return res.status(403).json({ ok: false, error: 'Only verified business workspaces can invite users' });
+
+  const email = normalizeString(req.body?.email).toLowerCase();
+  const role = normalizeString(req.body?.role) || 'agent';
+  if (!email) return res.status(400).json({ ok: false, error: 'email is required' });
+  if (!['admin', 'agent'].includes(role)) return res.status(400).json({ ok: false, error: 'role must be admin or agent' });
+
+  const existingInvitation = db.prepare(`SELECT * FROM user_invitations WHERE organization_id = ? AND email = ? AND status = 'pending' LIMIT 1`).get(req.params.id, email);
+  if (existingInvitation) return res.json({ ok: true, invitation: existingInvitation, alreadyPending: true });
+
+  const invitationId = `inv_${crypto.randomUUID()}`;
+  const ts = nowIso();
+  db.prepare(`INSERT INTO user_invitations (id, organization_id, email, role, status, invited_by_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)`).run(invitationId, req.params.id, email, role, req.actor.id, ts, ts);
+  const invitation = db.prepare(`SELECT * FROM user_invitations WHERE id = ? LIMIT 1`).get(invitationId);
+  res.status(201).json({ ok: true, invitation });
+});
+
+app.post('/api/invitations/:id/accept', requireIdentity, (req, res) => {
+  const invitation = db.prepare(`SELECT * FROM user_invitations WHERE id = ? LIMIT 1`).get(req.params.id);
+  if (!invitation) return res.status(404).json({ ok: false, error: 'Invitation not found' });
+  if (invitation.status !== 'pending') return res.status(409).json({ ok: false, error: 'Invitation is not pending' });
+  if (normalizeString(invitation.email).toLowerCase() !== req.identity.email) return res.status(403).json({ ok: false, error: 'Invitation email does not match your account' });
+
+  const existingWorkspace = getWorkspaceByIdentity(req.identity);
+  if (existingWorkspace) return res.status(409).json({ ok: false, error: 'This identity is already provisioned' });
+
+  const org = db.prepare(`SELECT * FROM organizations WHERE id = ? LIMIT 1`).get(invitation.organization_id);
+  if (!org) return res.status(404).json({ ok: false, error: 'Organization not found' });
+  if (org.workspace_type !== 'business_verified') return res.status(403).json({ ok: false, error: 'Invitation target is not a verified business workspace' });
+
+  const userId = `usr_${crypto.randomUUID()}`;
+  const ts = nowIso();
+  db.transaction(() => {
+    db.prepare(`INSERT INTO users (id, organization_id, full_name, email, role, status, clerk_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?)`).run(userId, org.id, req.identity.email, req.identity.email, invitation.role, req.identity.clerkUserId, ts, ts);
+    db.prepare(`UPDATE user_invitations SET status = 'accepted', accepted_by_user_id = ?, updated_at = ? WHERE id = ?`).run(userId, ts, invitation.id);
+  })();
+
+  res.json({ ok: true, organization: { id: org.id, name: org.name }, user: { id: userId, email: req.identity.email, role: invitation.role } });
+});
+
 app.get('/api/users', requirePermission('team.manageUsers'), (_req, res) => {
   const rows = db
     .prepare(`SELECT * FROM users WHERE organization_id = ? ORDER BY role = 'owner' DESC, created_at ASC`)
