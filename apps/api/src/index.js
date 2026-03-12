@@ -14,7 +14,7 @@ app.use(express.json());
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,PUT,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,x-user-email');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,x-user-email,x-clerk-user-id');
   if (req.method === 'OPTIONS') return res.status(204).end();
   next();
 });
@@ -284,8 +284,26 @@ function renderTemplate(body, vars = {}) {
   return body.replace(/{{\s*([a-zA-Z0-9_]+)\s*}}/g, (_m, k) => vars[k] ?? `{{${k}}}`);
 }
 
+function getRequestIdentity(req) {
+  const email = normalizeString(req.header('x-user-email')).toLowerCase();
+  const clerkUserId = normalizeString(req.header('x-clerk-user-id'));
+  return {
+    email: email || null,
+    clerkUserId: clerkUserId || null,
+  };
+}
+
 function getActor(req) {
-  const email = normalizeString(req.header('x-user-email') || defaultOwnerEmail).toLowerCase();
+  const identity = getRequestIdentity(req);
+
+  if (identity.clerkUserId) {
+    const byClerk = db
+      .prepare(`SELECT * FROM users WHERE clerk_user_id = ? LIMIT 1`)
+      .get(identity.clerkUserId);
+    if (byClerk) return byClerk;
+  }
+
+  const email = identity.email || defaultOwnerEmail;
   if (!email) return null;
 
   return db
@@ -368,6 +386,30 @@ function requireAuthenticated(req, res, next) {
   next();
 }
 
+function requireIdentity(req, res, next) {
+  const identity = getRequestIdentity(req);
+  if (!identity.email || !identity.clerkUserId) {
+    return res.status(401).json({ ok: false, error: 'Authenticated identity is required' });
+  }
+  req.identity = identity;
+  next();
+}
+
+function getWorkspaceByIdentity(identity) {
+  if (!identity) return null;
+
+  if (identity.clerkUserId) {
+    const byClerk = db.prepare(`SELECT o.*, u.id AS user_id, u.role AS user_role, u.status AS user_status, u.email AS user_email FROM users u JOIN organizations o ON o.id = u.organization_id WHERE u.clerk_user_id = ? LIMIT 1`).get(identity.clerkUserId);
+    if (byClerk) return byClerk;
+  }
+
+  if (identity.email) {
+    return db.prepare(`SELECT o.*, u.id AS user_id, u.role AS user_role, u.status AS user_status, u.email AS user_email FROM users u JOIN organizations o ON o.id = u.organization_id WHERE u.email = ? LIMIT 1`).get(identity.email);
+  }
+
+  return null;
+}
+
 function requireRoles(roles) {
   return (req, res, next) => {
     requireAuthenticated(req, res, () => {
@@ -391,6 +433,122 @@ function requirePermission(permissionKey) {
 }
 
 app.get('/health', (_req, res) => res.json({ ok: true }));
+
+app.get('/api/access/me', requireIdentity, (req, res) => {
+  const workspace = getWorkspaceByIdentity(req.identity);
+  const pendingRequest = db.prepare(`SELECT id, organization_name, status, created_at, updated_at, role_title, line_of_business, notes FROM access_requests WHERE clerk_user_id = ? ORDER BY created_at DESC LIMIT 1`).get(req.identity.clerkUserId);
+
+  if (workspace) {
+    return res.json({
+      ok: true,
+      state: 'approved',
+      workspace: {
+        id: workspace.id,
+        name: workspace.name,
+        workspaceType: workspace.workspace_type,
+      },
+      user: {
+        id: workspace.user_id,
+        role: workspace.user_role,
+        status: workspace.user_status,
+        email: workspace.user_email,
+      },
+    });
+  }
+
+  if (pendingRequest) {
+    return res.json({
+      ok: true,
+      state: pendingRequest.status,
+      request: {
+        id: pendingRequest.id,
+        organizationName: pendingRequest.organization_name,
+        roleTitle: pendingRequest.role_title,
+        lineOfBusiness: pendingRequest.line_of_business,
+        notes: pendingRequest.notes,
+        createdAt: pendingRequest.created_at,
+        updatedAt: pendingRequest.updated_at,
+      },
+    });
+  }
+
+  return res.json({ ok: true, state: 'authenticated_not_onboarded' });
+});
+
+app.post('/api/access/individual', requireIdentity, (req, res) => {
+  const existingWorkspace = getWorkspaceByIdentity(req.identity);
+  if (existingWorkspace) {
+    return res.status(409).json({ ok: false, error: 'This identity is already provisioned' });
+  }
+
+  const fullName = normalizeString(req.body?.fullName);
+  const email = normalizeString(req.body?.email).toLowerCase();
+  const workspaceName = normalizeString(req.body?.workspaceName);
+  const lineOfBusiness = normalizeString(req.body?.lineOfBusiness);
+  const useCase = normalizeString(req.body?.useCase);
+  const notes = normalizeString(req.body?.notes);
+
+  if (!fullName) return res.status(400).json({ ok: false, error: 'fullName is required' });
+  if (!email) return res.status(400).json({ ok: false, error: 'email is required' });
+  if (!workspaceName) return res.status(400).json({ ok: false, error: 'workspaceName is required' });
+
+  const orgId = `org_${crypto.randomUUID()}`;
+  const userId = `usr_${crypto.randomUUID()}`;
+  const ts = nowIso();
+
+  const tx = db.transaction(() => {
+    db.prepare(`INSERT INTO organizations (id, name, timezone, workspace_type, created_at, updated_at) VALUES (?, ?, ?, 'individual', ?, ?)`).run(orgId, workspaceName, 'America/New_York', ts, ts);
+    db.prepare(`INSERT INTO users (id, organization_id, full_name, email, role, status, clerk_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, 'owner', 'active', ?, ?, ?)`).run(userId, orgId, fullName, email, req.identity.clerkUserId, ts, ts);
+    db.prepare(`INSERT INTO settings (id, organization_id, key, value_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`).run(`set_${crypto.randomUUID()}`, orgId, BUSINESS_SETTINGS_KEY, JSON.stringify({
+      businessName: workspaceName,
+      timezone: 'America/New_York',
+      lineOfBusiness,
+      useCase,
+      notes,
+      bookingLink: 'https://calendly.com/your-link',
+      hours: defaultBusinessSettings.hours,
+    }), ts, ts);
+  });
+
+  tx();
+  res.status(201).json({ ok: true, workspace: { id: orgId, name: workspaceName, workspaceType: 'individual' }, user: { id: userId, role: 'owner', email } });
+});
+
+app.post('/api/access/business-request', requireIdentity, (req, res) => {
+  const existingWorkspace = getWorkspaceByIdentity(req.identity);
+  if (existingWorkspace) {
+    return res.status(409).json({ ok: false, error: 'This identity is already provisioned' });
+  }
+
+  const fullName = normalizeString(req.body?.fullName);
+  const email = normalizeString(req.body?.email).toLowerCase();
+  const roleTitle = normalizeString(req.body?.roleTitle);
+  const organizationName = normalizeString(req.body?.organizationName);
+  const website = normalizeString(req.body?.website);
+  const lineOfBusiness = normalizeString(req.body?.lineOfBusiness);
+  const teamSize = normalizeString(req.body?.teamSize);
+  const requestedFeatures = Array.isArray(req.body?.requestedFeatures) ? req.body.requestedFeatures.map((v) => normalizeString(v)).filter(Boolean) : [];
+  const authorityAttestation = Boolean(req.body?.authorityAttestation);
+  const notes = normalizeString(req.body?.notes);
+
+  if (!fullName) return res.status(400).json({ ok: false, error: 'fullName is required' });
+  if (!email) return res.status(400).json({ ok: false, error: 'email is required' });
+  if (!organizationName) return res.status(400).json({ ok: false, error: 'organizationName is required' });
+  if (!authorityAttestation) return res.status(400).json({ ok: false, error: 'authorityAttestation is required' });
+
+  const existingRequest = db.prepare(`SELECT * FROM access_requests WHERE clerk_user_id = ? LIMIT 1`).get(req.identity.clerkUserId);
+  const ts = nowIso();
+
+  if (existingRequest) {
+    db.prepare(`UPDATE access_requests SET email = ?, full_name = ?, role_title = ?, organization_name = ?, website = ?, line_of_business = ?, requested_features_json = ?, team_size = ?, authority_attestation = ?, notes = ?, status = 'pending', updated_at = ? WHERE id = ?`).run(email, fullName, roleTitle || null, organizationName, website || null, lineOfBusiness || null, JSON.stringify(requestedFeatures), teamSize || null, authorityAttestation ? 1 : 0, notes || null, ts, existingRequest.id);
+    return res.json({ ok: true, request: { id: existingRequest.id, status: 'pending', organizationName, updatedAt: ts } });
+  }
+
+  const requestId = `req_${crypto.randomUUID()}`;
+  db.prepare(`INSERT INTO access_requests (id, clerk_user_id, email, full_name, request_kind, role_title, organization_name, website, line_of_business, requested_features_json, team_size, authority_attestation, notes, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'business_workspace', ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`).run(requestId, req.identity.clerkUserId, email, fullName, roleTitle || null, organizationName, website || null, lineOfBusiness || null, JSON.stringify(requestedFeatures), teamSize || null, authorityAttestation ? 1 : 0, notes || null, ts, ts);
+
+  res.status(201).json({ ok: true, request: { id: requestId, status: 'pending', organizationName, createdAt: ts } });
+});
 
 app.get('/api/me/permissions', requireAuthenticated, (req, res) => {
   res.json({

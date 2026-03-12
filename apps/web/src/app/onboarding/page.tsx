@@ -9,7 +9,7 @@ export default async function OnboardingPage() {
   return (
     <AppShell
       title="Onboarding"
-      subtitle="Auth scaffold in progress: choose the workspace path we’ll wire into provisioning next."
+      subtitle="Choose the workspace path that fits how you plan to use LeadSprint."
     >
       <section style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 16 }}>
         <article style={cardStyle}>
@@ -20,6 +20,7 @@ export default async function OnboardingPage() {
             <li>No formal business verification up front</li>
             <li>Upgrade to a verified business workspace may require a later migration</li>
           </ul>
+          <p style={{ marginBottom: 0 }}><Link href="/onboarding/individual">Create individual workspace</Link></p>
         </article>
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0 }}>Verified business workspace</h2>
@@ -27,8 +28,9 @@ export default async function OnboardingPage() {
           <ul>
             <li>Supports teammate invites after approval</li>
             <li>Designed for LLCs, corporations, and delegated business admins</li>
-            <li>Will require supporting documentation in the full flow</li>
+            <li>Documentation can be reviewed manually in the first version</li>
           </ul>
+          <p style={{ marginBottom: 0 }}><Link href="/onboarding/business">Request verified business workspace</Link></p>
         </article>
       </section>
 
@@ -37,7 +39,7 @@ export default async function OnboardingPage() {
         <ul>
           <li>Clerk package installed: {authScaffoldEnabled ? 'yes' : 'not configured yet'}</li>
           <li>Current authenticated user: {currentUser?.email || 'none'}</li>
-          <li>Next implementation steps: provisioning status API, individual setup flow, business verification request flow, owner invite flow</li>
+          <li>Provisioning endpoints are being wired in now</li>
         </ul>
         <p style={{ marginBottom: 0 }}>
           If you already belong to a verified business workspace later on, you’ll be invited by that workspace’s owner/admin rather than joining publicly.
@@ -46,7 +48,6 @@ export default async function OnboardingPage() {
 
       <section style={{ ...cardStyle, marginTop: 16 }}>
         <h2 style={{ marginTop: 0 }}>Temporary navigation</h2>
-        <p>This page is intentionally a scaffold. Once provisioning APIs exist, it will branch into real forms and status pages.</p>
         <p style={{ marginBottom: 0 }}>
           <Link href="/dashboard">Back to dashboard</Link>
         </p>
