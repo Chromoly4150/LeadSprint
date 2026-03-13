@@ -2,7 +2,7 @@
 
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
-import { apiFetch } from '../../lib/api';
+import { ApiFetchError, apiFetch } from '../../lib/api';
 import { internalApiFetch } from '../../lib/api/internal-api';
 import { getCurrentAuthUser } from '../../lib/auth/current-user';
 
@@ -27,6 +27,14 @@ function setDraftCookie(draft: RequestAccessDraft) {
   });
 }
 
+function redirectWithRequestError(kind: 'individual' | 'business', draft: RequestAccessDraft, error: unknown) {
+  setDraftCookie(draft);
+  const message = error instanceof ApiFetchError
+    ? error.message
+    : 'LeadSprint hit a temporary server issue while saving your request. Please try again in a few seconds.';
+  redirect(`/request-access?resume=1&error=${encodeURIComponent(message)}#${kind}-request`);
+}
+
 export async function submitIndividualAccessRequest(formData: FormData) {
   const currentUser = await getCurrentAuthUser();
   const payload = {
@@ -37,27 +45,32 @@ export async function submitIndividualAccessRequest(formData: FormData) {
     useCase: normalize(formData.get('useCase')),
     notes: normalize(formData.get('notes')),
   };
+  const draft = { path: 'individual' as const, payload };
 
-  if (!currentUser) {
-    await apiFetch('/api/public/access/individual', {
+  try {
+    if (!currentUser) {
+      await apiFetch('/api/public/access/individual', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      cookies().delete(DRAFT_COOKIE);
+      redirect('/request-access?submitted=individual');
+    }
+
+    await internalApiFetch('/api/access/individual', {
       method: 'POST',
-      body: JSON.stringify(payload),
+      body: JSON.stringify({
+        ...payload,
+        fullName: payload.fullName || currentUser.fullName || '',
+        email: payload.email || currentUser.email || '',
+      }),
     });
+
     cookies().delete(DRAFT_COOKIE);
-    redirect('/request-access?submitted=individual');
+    redirect('/access-status');
+  } catch (error) {
+    redirectWithRequestError('individual', draft, error);
   }
-
-  await internalApiFetch('/api/access/individual', {
-    method: 'POST',
-    body: JSON.stringify({
-      ...payload,
-      fullName: payload.fullName || currentUser.fullName || '',
-      email: payload.email || currentUser.email || '',
-    }),
-  });
-
-  cookies().delete(DRAFT_COOKIE);
-  redirect('/access-status');
 }
 
 export async function submitBusinessAccessRequest(formData: FormData) {
@@ -75,25 +88,30 @@ export async function submitBusinessAccessRequest(formData: FormData) {
     authorityAttestation: formData.get('authorityAttestation') === 'on',
     notes: normalize(formData.get('notes')),
   };
+  const draft = { path: 'business' as const, payload };
 
-  if (!currentUser) {
-    await apiFetch('/api/public/access/business-request', {
+  try {
+    if (!currentUser) {
+      await apiFetch('/api/public/access/business-request', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      cookies().delete(DRAFT_COOKIE);
+      redirect('/request-access?submitted=business');
+    }
+
+    await internalApiFetch('/api/access/business-request', {
       method: 'POST',
-      body: JSON.stringify(payload),
+      body: JSON.stringify({
+        ...payload,
+        fullName: payload.fullName || currentUser.fullName || '',
+        email: payload.email || currentUser.email || '',
+      }),
     });
+
     cookies().delete(DRAFT_COOKIE);
-    redirect('/request-access?submitted=business');
+    redirect('/access-status');
+  } catch (error) {
+    redirectWithRequestError('business', draft, error);
   }
-
-  await internalApiFetch('/api/access/business-request', {
-    method: 'POST',
-    body: JSON.stringify({
-      ...payload,
-      fullName: payload.fullName || currentUser.fullName || '',
-      email: payload.email || currentUser.email || '',
-    }),
-  });
-
-  cookies().delete(DRAFT_COOKIE);
-  redirect('/access-status');
 }

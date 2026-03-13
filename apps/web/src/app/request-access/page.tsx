@@ -68,7 +68,7 @@ export const metadata = {
   },
 };
 
-export default async function RequestAccessPage({ searchParams }: { searchParams?: { resume?: string; submitted?: string } }) {
+export default async function RequestAccessPage({ searchParams }: { searchParams?: { resume?: string; submitted?: string; error?: string } }) {
   const currentUser = await getCurrentAuthUser();
   const state = await getProvisioningState();
   const draft = getDraft();
@@ -82,6 +82,7 @@ export default async function RequestAccessPage({ searchParams }: { searchParams
   const businessDraft = draft.path === 'business' ? draft : {};
   const businessSelected = searchParams?.resume === '1' ? draft.path === 'business' : true;
   const submittedKind = searchParams?.submitted === 'individual' || searchParams?.submitted === 'business' ? searchParams.submitted : null;
+  const requestError = searchParams?.error ? decodeURIComponent(searchParams.error) : null;
 
   return (
     <main style={{ background: '#f8fafc', minHeight: '100vh' }}>
@@ -103,6 +104,12 @@ export default async function RequestAccessPage({ searchParams }: { searchParams
               <p style={{ marginBottom: 0, color: '#1f2937' }}>
                 We saved your request for review. Do not create an account unless LeadSprint approves or invites you. If you already have approval, use the activation path you were given; otherwise wait for follow-up by email.
               </p>
+            </div>
+          ) : null}
+          {requestError ? (
+            <div style={{ ...cardStyle, padding: 18, borderColor: '#fecaca', background: '#fef2f2' }}>
+              <strong>Could not submit your request yet.</strong>
+              <p style={{ marginBottom: 0, color: '#7f1d1d' }}>{requestError}</p>
             </div>
           ) : null}
           <div style={{ ...cardStyle, padding: 18 }}>
