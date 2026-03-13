@@ -145,6 +145,8 @@ Handles:
 - invitations
 - permission checks
 - org settings
+- internal employee role and permission tiers
+- support access / impersonation policy state
 
 ## 2. Leads domain
 Handles:
@@ -244,6 +246,13 @@ For v1, keep it simple:
 - one postgres database
 - one redis instance
 - one or more worker processes
+
+Internally, plan for three trust zones over time:
+- Sandbox
+- Staging
+- Admin / production operations
+
+These should eventually have clearly separated configuration, data, and provider credentials.
 
 This is enough to support:
 - authenticated app usage
