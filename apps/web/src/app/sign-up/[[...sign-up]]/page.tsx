@@ -9,8 +9,14 @@ export const metadata = {
   },
 };
 
-export default function SignUpPage({ searchParams }: { searchParams?: { invite?: string; approved?: string } }) {
+function getSafeRedirectUrl(value?: string) {
+  if (!value || !value.startsWith('/')) return getOnboardingRedirectUrl();
+  return value;
+}
+
+export default function SignUpPage({ searchParams }: { searchParams?: { invite?: string; approved?: string; redirect_url?: string } }) {
   const allowed = Boolean(searchParams?.invite || searchParams?.approved);
+  const redirectUrl = getSafeRedirectUrl(searchParams?.redirect_url);
 
   if (!authScaffoldEnabled) {
     return (
@@ -43,7 +49,7 @@ export default function SignUpPage({ searchParams }: { searchParams?: { invite?:
 
   return (
     <main style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', padding: 24, background: '#f6f7fb' }}>
-      <SignUp signInUrl="/sign-in" forceRedirectUrl={getOnboardingRedirectUrl()} fallbackRedirectUrl={getOnboardingRedirectUrl()} />
+      <SignUp signInUrl="/sign-in" forceRedirectUrl={redirectUrl} fallbackRedirectUrl={redirectUrl} />
     </main>
   );
 }

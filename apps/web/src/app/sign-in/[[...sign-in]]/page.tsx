@@ -9,7 +9,14 @@ export const metadata = {
   },
 };
 
-export default function SignInPage() {
+function getSafeRedirectUrl(value?: string) {
+  if (!value || !value.startsWith('/')) return getOnboardingRedirectUrl();
+  return value;
+}
+
+export default function SignInPage({ searchParams }: { searchParams?: { redirect_url?: string } }) {
+  const redirectUrl = getSafeRedirectUrl(searchParams?.redirect_url);
+
   if (!authScaffoldEnabled) {
     return (
       <main style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', padding: 24, background: '#f6f7fb' }}>
@@ -24,7 +31,7 @@ export default function SignInPage() {
 
   return (
     <main style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', padding: 24, background: '#f6f7fb' }}>
-      <SignIn signUpUrl="/sign-up" forceRedirectUrl={getOnboardingRedirectUrl()} fallbackRedirectUrl={getOnboardingRedirectUrl()} />
+      <SignIn signUpUrl="/sign-up" forceRedirectUrl={redirectUrl} fallbackRedirectUrl={redirectUrl} />
     </main>
   );
 }

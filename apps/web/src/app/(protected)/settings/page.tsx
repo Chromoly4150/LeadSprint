@@ -114,44 +114,48 @@ export default async function SettingsPage() {
                 <h3 style={{ margin: 0, textTransform: 'capitalize' }}>{statusKey.replaceAll('_', ' ')}</h3>
                 {rows.length === 0 ? (
                   <p style={{ margin: 0, color: '#6b7280' }}>No {statusKey.replaceAll('_', ' ')} requests.</p>
-                ) : rows.map((request) => (
-                  <div key={request.id} style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 12, display: 'grid', gap: 10 }}>
-                <div>
-                  <div style={{ fontWeight: 700 }}>{request.organization_name}</div>
-                  <div style={{ color: '#6b7280', fontSize: 13 }}>{request.full_name} · {request.email}</div>
-                  <div style={{ color: '#6b7280', fontSize: 12 }}>{request.status} · {request.role_title || 'role not specified'} · {request.line_of_business || 'line of business not provided'}</div>
-                </div>
-                <div style={{ fontSize: 13, color: '#374151' }}>
-                  <div>Website: {request.website || '—'}</div>
-                  <div>Team size: {request.team_size || '—'}</div>
-                  <div>Requested features: {request.requested_features?.join(', ') || '—'}</div>
-                  <div>Authority attested: {request.authority_attestation ? 'yes' : 'no'}</div>
-                  <div>Notes: {request.notes || '—'}</div>
-                </div>
-                {request.status !== 'approved' && request.status !== 'rejected' ? (
-                  <div style={{ display: 'grid', gap: 8 }}>
-                    <form action={approveBusinessRequestAction} style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                      <input type="hidden" name="requestId" value={request.id} />
-                      <input name="reviewNotes" placeholder="Approval notes (optional)" style={{ ...inputStyle, minWidth: 260 }} />
-                      <button type="submit">Approve business</button>
-                    </form>
-                    <form action={followUpBusinessRequestAction} style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                      <input type="hidden" name="requestId" value={request.id} />
-                      <input name="reviewNotes" placeholder="What follow-up is needed?" style={{ ...inputStyle, minWidth: 260 }} />
-                      <button type="submit">Needs follow-up</button>
-                    </form>
-                    <form action={rejectBusinessRequestAction} style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                      <input type="hidden" name="requestId" value={request.id} />
-                      <input name="reviewNotes" placeholder="Rejection notes" style={{ ...inputStyle, minWidth: 260 }} />
-                      <button type="submit">Reject</button>
-                    </form>
-                  </div>
-                ) : request.review_notes ? (
-                  <p style={{ margin: 0, color: '#6b7280', fontSize: 13 }}>Review notes: {request.review_notes}</p>
-                ) : null}
+                ) : (
+                  rows.map((request) => (
+                    <div key={request.id} style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 12, display: 'grid', gap: 10 }}>
+                      <div>
+                        <div style={{ fontWeight: 700 }}>{request.organization_name}</div>
+                        <div style={{ color: '#6b7280', fontSize: 13 }}>{request.full_name} · {request.email}</div>
+                        <div style={{ color: '#6b7280', fontSize: 12 }}>{request.status} · {request.role_title || 'role not specified'} · {request.line_of_business || 'line of business not provided'}</div>
+                      </div>
+                      <div style={{ fontSize: 13, color: '#374151' }}>
+                        <div>Website: {request.website || '—'}</div>
+                        <div>Team size: {request.team_size || '—'}</div>
+                        <div>Requested features: {request.requested_features?.join(', ') || '—'}</div>
+                        <div>Authority attested: {request.authority_attestation ? 'yes' : 'no'}</div>
+                        <div>Notes: {request.notes || '—'}</div>
+                      </div>
+                      {request.status !== 'approved' && request.status !== 'rejected' ? (
+                        <div style={{ display: 'grid', gap: 8 }}>
+                          <form action={approveBusinessRequestAction} style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                            <input type="hidden" name="requestId" value={request.id} />
+                            <input name="reviewNotes" placeholder="Approval notes (optional)" style={{ ...inputStyle, minWidth: 260 }} />
+                            <button type="submit">Approve business</button>
+                          </form>
+                          <form action={followUpBusinessRequestAction} style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                            <input type="hidden" name="requestId" value={request.id} />
+                            <input name="reviewNotes" placeholder="What follow-up is needed?" style={{ ...inputStyle, minWidth: 260 }} />
+                            <button type="submit">Needs follow-up</button>
+                          </form>
+                          <form action={rejectBusinessRequestAction} style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                            <input type="hidden" name="requestId" value={request.id} />
+                            <input name="reviewNotes" placeholder="Rejection notes" style={{ ...inputStyle, minWidth: 260 }} />
+                            <button type="submit">Reject</button>
+                          </form>
+                        </div>
+                      ) : request.review_notes ? (
+                        <p style={{ margin: 0, color: '#6b7280', fontSize: 13 }}>Review notes: {request.review_notes}</p>
+                      ) : null}
+                    </div>
+                  ))
+                )}
               </div>
-            ))
-          )}
+            );
+          })}
         </div>
       </section>
 

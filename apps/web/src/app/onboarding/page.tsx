@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 import { AppShell, cardStyle } from '../../components/app-shell';
 import { WorkspaceBadge } from '../../components/workspace-badge';
 import { authScaffoldEnabled } from '../../lib/auth/config';
@@ -9,31 +10,36 @@ export default async function OnboardingPage() {
   const currentUser = await getCurrentAuthUser();
   const provisioning = await getProvisioningState();
 
+  if (provisioning.state === 'signed_out') redirect('/request-access');
+  if (provisioning.state === 'pending' || provisioning.state === 'needs_follow_up' || provisioning.state === 'rejected' || provisioning.state === 'invited') {
+    redirect('/access-status');
+  }
+
   return (
     <AppShell
       title="Onboarding"
-      subtitle="Choose the workspace path that fits how you plan to use LeadSprint."
+      subtitle="This is now the authenticated continuation of the request-access flow, not the primary public entry point."
     >
       <section style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 16 }}>
         <article style={cardStyle}>
-          <h2 style={{ marginTop: 0 }}>Individual workspace</h2>
-          <p>For sole proprietors and solo operators. One user only, no teammate invites.</p>
+          <h2 style={{ marginTop: 0 }}>Need a solo workspace?</h2>
+          <p>Use the public request form first, then continue here after sign-in if needed.</p>
           <ul>
-            <li>Fastest path into the product</li>
-            <li>No formal business verification up front</li>
-            <li>Upgrade to a verified business workspace may require a later migration</li>
+            <li>One-person use only</li>
+            <li>No teammate invites</li>
+            <li>Fastest path for sole proprietors</li>
           </ul>
-          <p style={{ marginBottom: 0 }}><Link href="/onboarding/individual">Create individual workspace</Link></p>
+          <p style={{ marginBottom: 0 }}><Link href="/request-access#individual-request">Go to individual request</Link></p>
         </article>
         <article style={cardStyle}>
-          <h2 style={{ marginTop: 0 }}>Verified business workspace</h2>
-          <p>For companies and teams. Requires manual review that the business exists and you’re authorized to act for it.</p>
+          <h2 style={{ marginTop: 0 }}>Need a reviewed business workspace?</h2>
+          <p>Start from the public request form so your business context is captured before provisioning.</p>
           <ul>
-            <li>Supports teammate invites after approval</li>
-            <li>Designed for LLCs, corporations, and delegated business admins</li>
-            <li>Documentation can be reviewed manually in the first version</li>
+            <li>Manual review before multi-user access</li>
+            <li>Invite teammates only after approval</li>
+            <li>Built for LLCs, corporations, and authorized operators</li>
           </ul>
-          <p style={{ marginBottom: 0 }}><Link href="/onboarding/business">Request verified business workspace</Link></p>
+          <p style={{ marginBottom: 0 }}><Link href="/request-access#business-request">Go to business request</Link></p>
         </article>
       </section>
 
@@ -48,14 +54,7 @@ export default async function OnboardingPage() {
           ) : null}
         </div>
         <p style={{ marginBottom: 0 }}>
-          If you already belong to a verified business workspace later on, you’ll be invited by that workspace’s owner/admin rather than joining publicly.
-        </p>
-      </section>
-
-      <section style={{ ...cardStyle, marginTop: 16 }}>
-        <h2 style={{ marginTop: 0 }}>Temporary navigation</h2>
-        <p style={{ marginBottom: 0 }}>
-          <Link href="/dashboard">Back to dashboard</Link>
+          If you were invited into an existing company workspace or already have a request under review, LeadSprint will send you to the right status screen automatically.
         </p>
       </section>
     </AppShell>
