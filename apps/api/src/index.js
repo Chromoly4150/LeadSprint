@@ -400,7 +400,7 @@ function saveProviderSettingsRow(orgId, providerKey, patch = {}) {
   }
 
   db.prepare(`INSERT INTO email_provider_settings (id, organization_id, provider_key, status, config_json, client_id, client_secret, redirect_uri, access_token, refresh_token, token_expires_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(`eps_${crypto.randomUUID()}`, orgId, providerKey, next.status, next.config_json, next.client_id, next.client_secret, next.redirect_uri, next.access_token, next.refresh_token, next.token_expires_at, ts, ts);
-  return getProviderSettings(providerKey);
+  return getProviderSettings(orgId, providerKey);
 }
 
 function loadGmailClientConfig() {
@@ -1403,23 +1403,24 @@ app.get('/api/auth/gmail/start', requirePermission('emailOutbox.manage'), (req, 
   const clientId = saved?.client_id;
   const redirectUri = saved?.redirect_uri;
   if (!clientId || !redirectUri) return res.status(400).json({ ok: false, error: 'Gmail provider is missing client configuration' });
-  const authUrl = buildAuthUrl({ clientId, redirectUri });
+  const authUrl = buildAuthUrl({ clientId, redirectUri, state: orgId });
   res.json({ ok: true, authUrl });
 });
 
 app.get('/api/auth/gmail/callback', async (req, res) => {
+  const orgId = normalizeString(req.query.orgId) || DEFAULT_ORG_ID;
   const code = normalizeString(req.query.code);
   const error = normalizeString(req.query.error);
   if (error) return res.status(400).send(`Gmail OAuth error: ${error}`);
   if (!code) return res.status(400).send('Missing OAuth code');
 
   try {
-    const saved = getProviderSettings('gmail');
+    const saved = getProviderSettings(orgId, 'gmail');
     if (!saved?.client_id || !saved?.client_secret || !saved?.redirect_uri) throw new Error('Gmail provider settings are incomplete');
     const tokens = await exchangeCodeForTokens({ clientId: saved.client_id, clientSecret: saved.client_secret, redirectUri: saved.redirect_uri, code });
     const profile = await fetchGoogleProfile(tokens.access_token);
     const config = saved.config_json ? JSON.parse(saved.config_json) : {};
-    const updated = saveProviderSettingsRow('gmail', {
+    const updated = saveProviderSettingsRow(orgId, 'gmail', {
       status: 'connected',
       config: { ...config, email: profile.email || null },
       access_token: tokens.access_token,
@@ -1456,7 +1457,7 @@ app.put('/api/email/provider-settings/:providerKey', requirePermission('emailOut
 
   const status = normalizeString(req.body?.status || 'configured') || 'configured';
   const config = req.body?.config && typeof req.body.config === 'object' ? req.body.config : {};
-  const saved = saveProviderSettingsRow(providerKey, {
+  const saved = saveProviderSettingsRow(getActorOrgId(req), providerKey, {
     status,
     config,
     client_id: normalizeString(req.body?.clientId) || undefined,
@@ -1517,7 +1518,7 @@ app.post('/api/email-outbox/:id/process', requirePermission('emailOutbox.manage'
   const provider = getProvider(item.provider_key || 'stub');
   try {
     const providerSettings = item.provider_key ? getProviderSettings(item.organization_id, item.provider_key) : null;
-    const result = await provider.send({ toEmail: item.to_email, subject: item.subject, body: item.body, providerSettings, saveProviderSettings: (patch) => saveProviderSettingsRow(item.provider_key || 'stub', patch) });
+    const result = await provider.send({ toEmail: item.to_email, subject: item.subject, body: item.body, providerSettings, saveProviderSettings: (patch) => saveProviderSettingsRow(item.organization_id, item.provider_key || 'stub', patch) });
     const ts = nowIso();
     const tx = db.transaction(() => {
       db.prepare(`UPDATE email_outbox SET send_status = 'sent', sent_at = ?, failed_at = NULL, last_error = NULL, updated_at = ? WHERE id = ?`).run(ts, ts, item.id);

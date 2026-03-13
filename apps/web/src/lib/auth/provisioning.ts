@@ -13,7 +13,7 @@ export type ProvisioningState =
 
 export async function getProvisioningState(): Promise<ProvisioningState> {
   if (!authScaffoldEnabled) {
-    return { state: 'approved', workspace: { id: 'org_default', name: 'Demo Org', workspaceType: 'business_verified' }, user: { role: 'owner', email: 'owner@leadsprint.local' } };
+    return { state: 'signed_out' };
   }
 
   const currentUser = await getCurrentAuthUser();

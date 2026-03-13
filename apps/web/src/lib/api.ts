@@ -10,7 +10,7 @@ function signIdentity(path: string, method: string, clerkUserId: string, email: 
   return crypto.createHmac('sha256', secret).update(payload).digest('hex');
 }
 
-export async function apiFetch<T>(path: string, init?: RequestInit, userEmail = 'owner@leadsprint.local'): Promise<T> {
+export async function apiFetch<T>(path: string, init?: RequestInit, userEmail = ''): Promise<T> {
   const headers = new Headers(init?.headers || {});
   if (!headers.has('Content-Type') && init?.body) headers.set('Content-Type', 'application/json');
 
