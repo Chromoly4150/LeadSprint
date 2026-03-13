@@ -14,6 +14,8 @@ services:
         value: LeadSprint Demo Org
       - key: APP_BASE_URL
         value: https://leadsprint-api.onrender.com
+      - key: INTERNAL_API_AUTH_SECRET
+        sync: false
 
   - type: web
     name: leadsprint-web
@@ -26,3 +28,11 @@ services:
         value: 20
       - key: NEXT_PUBLIC_API_BASE
         value: https://leadsprint-api.onrender.com
+      - key: NEXT_PUBLIC_APP_URL
+        value: https://leadsprint-web.onrender.com
+      - key: NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
+        sync: false
+      - key: CLERK_SECRET_KEY
+        sync: false
+      - key: INTERNAL_API_AUTH_SECRET
+        sync: false
