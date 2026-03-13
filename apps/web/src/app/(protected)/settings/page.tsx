@@ -11,7 +11,7 @@ import {
   startGmailOAuthAction,
 } from './actions';
 
-type UserRow = { id: string; fullName: string; email: string; role: string; status?: string };
+type UserRow = { id: string; fullName: string; email: string; role: string; roleLabel?: string; status?: string };
 type ProviderRow = { key: string; label: string; needsAuth: boolean; status: string; updatedAt: string | null };
 type AccessRequestRow = {
   id: string;
@@ -40,7 +40,7 @@ export default async function SettingsPage() {
   const [usersRes, providersRes, meRes, requestsRes] = await Promise.all([
     internalApiFetch<{ users: UserRow[] }>('/api/users'),
     internalApiFetch<{ providers: ProviderRow[] }>('/api/email/provider-settings'),
-    internalApiFetch<{ actor: { id: string; email: string; role: string; status: string } }>('/api/me/permissions'),
+    internalApiFetch<{ actor: { id: string; email: string; role: string; status: string; roleLabel?: string } }>('/api/me/permissions'),
     internalApiFetch<{ requests: AccessRequestRow[] }>('/api/admin/access-requests').catch(() => ({ requests: [] })),
   ]);
 
@@ -64,10 +64,10 @@ export default async function SettingsPage() {
         <h2 style={{ marginTop: 0 }}>Current workspace</h2>
         <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
           <WorkspaceBadge workspaceType={workspaceType} role={meRes.actor.role} />
-          <span style={{ color: '#6b7280', fontSize: 13 }}>{meRes.actor.email}</span>
+          <span style={{ color: '#6b7280', fontSize: 13 }}>{meRes.actor.email} · {meRes.actor.roleLabel || meRes.actor.role}</span>
         </div>
         <p style={{ marginBottom: 0, color: '#6b7280' }}>
-          Individual workspaces stay solo. Verified business workspaces can review access requests and invite teammates.
+          Platform roles can review access requests across the system. Company roles manage only their own verified business workspace and team.
         </p>
       </section>
 
@@ -79,7 +79,7 @@ export default async function SettingsPage() {
               <div key={user.id} style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 12 }}>
                 <div style={{ fontWeight: 700 }}>{user.fullName}</div>
                 <div style={{ color: '#6b7280', fontSize: 13 }}>{user.email}</div>
-                <div style={{ color: '#6b7280', fontSize: 12 }}>{user.role} · {user.status || 'active'}</div>
+                <div style={{ color: '#6b7280', fontSize: 12 }}>{user.roleLabel || user.role} · {user.status || 'active'}</div>
               </div>
             ))}
           </div>
@@ -175,9 +175,9 @@ export default async function SettingsPage() {
             <form action={createInvitationAction} style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
               <input type="hidden" name="organizationId" value={orgIdForInvites} />
               <input name="email" type="email" placeholder="teammate@company.com" required style={{ ...inputStyle, minWidth: 240 }} />
-              <select name="role" style={inputStyle} defaultValue="agent">
-                <option value="agent">agent</option>
-                <option value="admin">admin</option>
+              <select name="role" style={inputStyle} defaultValue="company_agent">
+                <option value="company_agent">Agent</option>
+                <option value="company_admin">Admin</option>
               </select>
               <button type="submit">Invite user</button>
             </form>

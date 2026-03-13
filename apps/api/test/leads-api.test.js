@@ -144,19 +144,19 @@ test('user organization roles enforce owner protections', async (t) => {
   const initialUsersRes = await fetch(`${api.baseUrl}/api/users`);
   const initialUsersJson = await initialUsersRes.json();
   assert.equal(initialUsersJson.ok, true);
-  const owner = initialUsersJson.users.find((u) => u.role === 'owner');
-  assert.ok(owner, 'expected a seeded organization owner');
+  const owner = initialUsersJson.users.find((u) => u.role === 'company_owner');
+  assert.ok(owner, 'expected a seeded company owner');
 
   const ownerHeaders = { 'content-type': 'application/json', 'x-user-email': owner.email };
 
   const addAdminRes = await fetch(`${api.baseUrl}/api/users`, {
     method: 'POST',
     headers: ownerHeaders,
-    body: JSON.stringify({ fullName: 'Alex Admin', email: 'alex.admin@example.com', role: 'admin' }),
+    body: JSON.stringify({ fullName: 'Alex Admin', email: 'alex.admin@example.com', role: 'company_admin' }),
   });
   assert.equal(addAdminRes.status, 201);
   const addAdminJson = await addAdminRes.json();
-  assert.equal(addAdminJson.user.role, 'admin');
+  assert.equal(addAdminJson.user.role, 'company_admin');
 
   const removeOwnerRes = await fetch(`${api.baseUrl}/api/users/${owner.id}`, {
     method: 'DELETE',
@@ -164,7 +164,7 @@ test('user organization roles enforce owner protections', async (t) => {
   });
   assert.equal(removeOwnerRes.status, 400);
   const removeOwnerJson = await removeOwnerRes.json();
-  assert.match(removeOwnerJson.error, /Cannot remove the organization owner/);
+  assert.match(removeOwnerJson.error, /Cannot remove the protected owner account/);
 
   const removeAdminRes = await fetch(`${api.baseUrl}/api/users/${addAdminJson.user.id}`, {
     method: 'DELETE',
@@ -184,7 +184,7 @@ test('agents cannot access owner/admin-protected routes', async (t) => {
   const createAgent = await fetch(`${api.baseUrl}/api/users`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-user-email': 'owner@leadsprint.local' },
-    body: JSON.stringify({ fullName: 'Avery Agent', email: 'avery.agent@example.com', role: 'agent' }),
+    body: JSON.stringify({ fullName: 'Avery Agent', email: 'avery.agent@example.com', role: 'company_agent' }),
   });
   assert.equal(createAgent.status, 201);
 
@@ -208,7 +208,7 @@ test('permission overrides can grant agent access to business settings', async (
   const createAgent = await fetch(`${api.baseUrl}/api/users`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-user-email': 'owner@leadsprint.local' },
-    body: JSON.stringify({ fullName: 'Sam Agent', email: 'sam.agent@example.com', role: 'agent' }),
+    body: JSON.stringify({ fullName: 'Sam Agent', email: 'sam.agent@example.com', role: 'company_agent' }),
   });
   assert.equal(createAgent.status, 201);
   const created = await createAgent.json();
@@ -264,7 +264,7 @@ test('public business request can be approved into activation flow and auto-prov
   assert.equal(beforeApprovalLookup.status, 404);
 
   const requestsRes = await fetch(`${api.baseUrl}/api/admin/access-requests`, {
-    headers: { 'x-user-email': 'owner@leadsprint.local' },
+    headers: { 'x-user-email': 'josiahricheson@gmail.com' },
   });
   assert.equal(requestsRes.status, 200);
   const requestsJson = await requestsRes.json();
@@ -275,7 +275,7 @@ test('public business request can be approved into activation flow and auto-prov
 
   const approveRes = await fetch(`${api.baseUrl}/api/admin/access-requests/${request.id}/approve`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-user-email': 'owner@leadsprint.local' },
+    headers: { 'content-type': 'application/json', 'x-user-email': 'josiahricheson@gmail.com' },
     body: JSON.stringify({ reviewNotes: 'Approved for activation' }),
   });
   assert.equal(approveRes.status, 200);
@@ -318,7 +318,7 @@ test('public business request can be approved into activation flow and auto-prov
   assert.equal(meAfterProvisionJson.state, 'approved');
 
   const requestsAfterRes = await fetch(`${api.baseUrl}/api/admin/access-requests`, {
-    headers: { 'x-user-email': 'owner@leadsprint.local' },
+    headers: { 'x-user-email': 'josiahricheson@gmail.com' },
   });
   const requestsAfterJson = await requestsAfterRes.json();
   const requestAfter = requestsAfterJson.requests.find((row) => row.id === request.id);
@@ -349,7 +349,7 @@ test('activation endpoint rejects pending requests before approval', async (t) =
   assert.equal(submitRes.status, 201);
 
   const requestsRes = await fetch(`${api.baseUrl}/api/admin/access-requests`, {
-    headers: { 'x-user-email': 'owner@leadsprint.local' },
+    headers: { 'x-user-email': 'josiahricheson@gmail.com' },
   });
   const requestsJson = await requestsRes.json();
   const request = requestsJson.requests.find((row) => row.email === 'indy@example.com');

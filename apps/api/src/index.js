@@ -23,11 +23,15 @@ const DEFAULT_ORG_ID = process.env.DEFAULT_ORG_ID || 'org_default';
 const DEFAULT_ORG_NAME = process.env.DEFAULT_ORG_NAME || 'Default Organization';
 const FIRST_RESPONSE_TEMPLATE_KEY = 'first_response';
 const BUSINESS_SETTINGS_KEY = 'business_profile';
-const USER_ROLES = new Set(['owner', 'admin', 'agent']);
+const USER_ROLES = new Set(['platform_owner', 'platform_admin', 'platform_sme', 'platform_agent', 'company_owner', 'company_admin', 'company_agent']);
+const PLATFORM_ROLES = new Set(['platform_owner', 'platform_admin', 'platform_sme', 'platform_agent']);
+const COMPANY_ROLES = new Set(['company_owner', 'company_admin', 'company_agent']);
 const USER_STATUSES = new Set(['active', 'deactivated', 'suspended']);
 const LEAD_STATUSES = new Set(['new', 'contacted', 'booked', 'closed']);
 const URGENCY_STATUSES = new Set(['hot', 'warm', 'cold', 'needs_attention', 'sla_risk']);
 const KNOWN_PERMISSIONS = new Set([
+  'platform.accessRequests.review',
+  'platform.users.manage',
   'team.manageUsers',
   'settings.manageBusiness',
   'settings.manageTemplates',
@@ -43,7 +47,9 @@ const KNOWN_PERMISSIONS = new Set([
   'emailOutbox.manage',
 ]);
 const ROLE_DEFAULT_PERMISSIONS = {
-  owner: {
+  platform_owner: {
+    'platform.accessRequests.review': true,
+    'platform.users.manage': true,
     'team.manageUsers': true,
     'settings.manageBusiness': true,
     'settings.manageTemplates': true,
@@ -58,7 +64,9 @@ const ROLE_DEFAULT_PERMISSIONS = {
     'emailDrafts.manage': true,
     'emailOutbox.manage': true,
   },
-  admin: {
+  platform_admin: {
+    'platform.accessRequests.review': true,
+    'platform.users.manage': true,
     'team.manageUsers': true,
     'settings.manageBusiness': true,
     'settings.manageTemplates': true,
@@ -73,7 +81,77 @@ const ROLE_DEFAULT_PERMISSIONS = {
     'emailDrafts.manage': true,
     'emailOutbox.manage': true,
   },
-  agent: {
+  platform_sme: {
+    'platform.accessRequests.review': true,
+    'platform.users.manage': false,
+    'team.manageUsers': false,
+    'settings.manageBusiness': true,
+    'settings.manageTemplates': true,
+    'leads.view': true,
+    'leads.edit': true,
+    'leads.updateStatus': true,
+    'notes.viewInternal': true,
+    'notes.createInternal': true,
+    'reports.view': true,
+    'communications.view': true,
+    'communications.create': true,
+    'emailDrafts.manage': true,
+    'emailOutbox.manage': true,
+  },
+  platform_agent: {
+    'platform.accessRequests.review': false,
+    'platform.users.manage': false,
+    'team.manageUsers': false,
+    'settings.manageBusiness': false,
+    'settings.manageTemplates': false,
+    'leads.view': true,
+    'leads.edit': true,
+    'leads.updateStatus': true,
+    'notes.viewInternal': true,
+    'notes.createInternal': true,
+    'reports.view': true,
+    'communications.view': true,
+    'communications.create': true,
+    'emailDrafts.manage': true,
+    'emailOutbox.manage': true,
+  },
+  company_owner: {
+    'platform.accessRequests.review': false,
+    'platform.users.manage': false,
+    'team.manageUsers': true,
+    'settings.manageBusiness': true,
+    'settings.manageTemplates': true,
+    'leads.view': true,
+    'leads.edit': true,
+    'leads.updateStatus': true,
+    'notes.viewInternal': true,
+    'notes.createInternal': true,
+    'reports.view': true,
+    'communications.view': true,
+    'communications.create': true,
+    'emailDrafts.manage': true,
+    'emailOutbox.manage': true,
+  },
+  company_admin: {
+    'platform.accessRequests.review': false,
+    'platform.users.manage': false,
+    'team.manageUsers': true,
+    'settings.manageBusiness': true,
+    'settings.manageTemplates': true,
+    'leads.view': true,
+    'leads.edit': true,
+    'leads.updateStatus': true,
+    'notes.viewInternal': true,
+    'notes.createInternal': true,
+    'reports.view': true,
+    'communications.view': true,
+    'communications.create': true,
+    'emailDrafts.manage': true,
+    'emailOutbox.manage': true,
+  },
+  company_agent: {
+    'platform.accessRequests.review': false,
+    'platform.users.manage': false,
     'team.manageUsers': false,
     'settings.manageBusiness': false,
     'settings.manageTemplates': false,
@@ -156,6 +234,8 @@ if (!existingSettings) {
 
 const defaultOwnerEmail = normalizeString(process.env.DEFAULT_OWNER_EMAIL || 'owner@leadsprint.local').toLowerCase();
 const defaultOwnerName = normalizeString(process.env.DEFAULT_OWNER_NAME || 'Organization Owner');
+const platformOwnerEmail = normalizeString(process.env.PLATFORM_OWNER_EMAIL || 'josiahricheson@gmail.com').toLowerCase();
+const platformOwnerName = normalizeString(process.env.PLATFORM_OWNER_NAME || 'Josiah Richeson');
 const INTERNAL_API_AUTH_SECRET = normalizeString(process.env.INTERNAL_API_AUTH_SECRET);
 const GMAIL_JSON_PATH = path.join(__dirname, '..', '..', 'client_secret_852799874294-rtj7qmccrb77pi9lqn7ep9lfuf2d8pm6.apps.googleusercontent.com.json');
 const GMAIL_FALLBACK = {
@@ -164,16 +244,30 @@ const GMAIL_FALLBACK = {
   redirectUri: process.env.GMAIL_REDIRECT_URI || 'http://127.0.0.1:4000/api/auth/gmail/callback',
 };
 
-const existingOwner = db
-  .prepare(`SELECT id FROM users WHERE organization_id = ? AND role = 'owner' LIMIT 1`)
+const existingCompanyOwner = db
+  .prepare(`SELECT id FROM users WHERE organization_id = ? AND role IN ('owner', 'company_owner') LIMIT 1`)
   .get(DEFAULT_ORG_ID);
 
-if (!existingOwner) {
+if (!existingCompanyOwner) {
   const ts = nowIso();
   db.prepare(
     `INSERT INTO users (id, organization_id, full_name, email, role, status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, 'owner', 'active', ?, ?)`
+     VALUES (?, ?, ?, ?, 'company_owner', 'active', ?, ?)`
   ).run(`usr_${crypto.randomUUID()}`, DEFAULT_ORG_ID, defaultOwnerName, defaultOwnerEmail, ts, ts);
+} else {
+  db.prepare(`UPDATE users SET role = 'company_owner', updated_at = ? WHERE organization_id = ? AND role = 'owner'`).run(nowIso(), DEFAULT_ORG_ID);
+}
+
+const existingPlatformOwner = db
+  .prepare(`SELECT id FROM users WHERE lower(email) = ? LIMIT 1`)
+  .get(platformOwnerEmail);
+
+if (!existingPlatformOwner) {
+  const ts = nowIso();
+  db.prepare(
+    `INSERT INTO users (id, organization_id, full_name, email, role, status, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'platform_owner', 'active', ?, ?)`
+  ).run(`usr_${crypto.randomUUID()}`, DEFAULT_ORG_ID, platformOwnerName, platformOwnerEmail, ts, ts);
 }
 
 function normalizeString(v) {
@@ -281,6 +375,7 @@ function serializeUser(row) {
     fullName: row.full_name,
     email: row.email,
     role: row.role,
+    roleLabel: getRoleDisplayLabel(row.role),
     status: row.status,
     permissionOverrides: getPermissionOverrides(row),
     permissions: resolvePermissions(row),
@@ -343,6 +438,31 @@ function getRequestIdentity(req) {
   };
 }
 
+function ensureBootstrapActor(identity) {
+  const email = normalizeString(identity?.email).toLowerCase();
+  if (!email) return null;
+
+  let actor = db.prepare(`SELECT * FROM users WHERE lower(email) = ? LIMIT 1`).get(email);
+  if (!actor && email === platformOwnerEmail) {
+    const ts = nowIso();
+    const id = `usr_${crypto.randomUUID()}`;
+    db.prepare(`INSERT INTO users (id, organization_id, full_name, email, role, status, clerk_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, 'platform_owner', 'active', ?, ?, ?)`).run(id, DEFAULT_ORG_ID, platformOwnerName, email, identity?.clerkUserId || null, ts, ts);
+    actor = db.prepare(`SELECT * FROM users WHERE id = ? LIMIT 1`).get(id);
+  }
+
+  if (actor && actor.email.toLowerCase() === platformOwnerEmail && actor.role !== 'platform_owner') {
+    db.prepare(`UPDATE users SET role = 'platform_owner', updated_at = ? WHERE id = ?`).run(nowIso(), actor.id);
+    actor = { ...actor, role: 'platform_owner' };
+  }
+
+  if (actor && identity?.clerkUserId && !actor.clerk_user_id) {
+    db.prepare(`UPDATE users SET clerk_user_id = ?, updated_at = ? WHERE id = ?`).run(identity.clerkUserId, nowIso(), actor.id);
+    actor = { ...actor, clerk_user_id: identity.clerkUserId };
+  }
+
+  return actor;
+}
+
 function getActor(req) {
   const identity = getRequestIdentity(req);
 
@@ -356,7 +476,7 @@ function getActor(req) {
   const email = identity.email || defaultOwnerEmail;
   if (!email) return null;
 
-  return db
+  return ensureBootstrapActor(identity) || db
     .prepare(`SELECT * FROM users WHERE organization_id = ? AND email = ? LIMIT 1`)
     .get(DEFAULT_ORG_ID, email);
 }
@@ -503,7 +623,7 @@ function provisionApprovedRequest(request, reviewedByUserId = null, reviewNotes 
 
   const tx = db.transaction(() => {
     db.prepare(`INSERT INTO organizations (id, name, timezone, workspace_type, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`).run(orgId, orgName, 'America/New_York', workspaceType, ts, ts);
-    db.prepare(`INSERT INTO users (id, organization_id, full_name, email, role, status, clerk_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, 'owner', 'active', ?, ?, ?)`).run(userId, orgId, fullName, email, request.clerk_user_id || null, ts, ts);
+    db.prepare(`INSERT INTO users (id, organization_id, full_name, email, role, status, clerk_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, 'company_owner', 'active', ?, ?, ?)`).run(userId, orgId, fullName, email, request.clerk_user_id || null, ts, ts);
     db.prepare(`INSERT INTO settings (id, organization_id, key, value_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`).run(`set_${crypto.randomUUID()}`, orgId, BUSINESS_SETTINGS_KEY, JSON.stringify({
       businessName: orgName,
       timezone: 'America/New_York',
@@ -517,7 +637,31 @@ function provisionApprovedRequest(request, reviewedByUserId = null, reviewNotes 
   });
 
   tx();
-  return { organization: { id: orgId, name: orgName, workspaceType }, user: { id: userId, email, role: 'owner' } };
+  return { organization: { id: orgId, name: orgName, workspaceType }, user: { id: userId, email, role: 'company_owner' } };
+}
+
+function getRoleDisplayLabel(role) {
+  switch (role) {
+    case 'platform_owner': return 'Platform Owner';
+    case 'platform_admin': return 'Platform Admin';
+    case 'platform_sme': return 'SME';
+    case 'platform_agent': return 'Agent';
+    case 'company_owner': return 'Company Owner';
+    case 'company_admin': return 'Admin';
+    case 'company_agent': return 'Agent';
+    case 'owner': return 'Company Owner';
+    case 'admin': return 'Admin';
+    case 'agent': return 'Agent';
+    default: return role || 'Unknown role';
+  }
+}
+
+function canManageRole(actorRole, targetRole) {
+  if (actorRole === 'platform_owner') return true;
+  if (actorRole === 'platform_admin') return !['platform_owner'].includes(targetRole);
+  if (actorRole === 'company_owner') return COMPANY_ROLES.has(targetRole) && targetRole !== 'company_owner';
+  if (actorRole === 'company_admin') return targetRole === 'company_agent';
+  return false;
 }
 
 function requireRoles(roles) {
@@ -746,13 +890,14 @@ app.get('/api/me/permissions', requireAuthenticated, (req, res) => {
       id: req.actor.id,
       email: req.actor.email,
       role: req.actor.role,
+      roleLabel: getRoleDisplayLabel(req.actor.role),
       status: req.actor.status,
     },
     permissions: req.actorPermissions,
   });
 });
 
-app.get('/api/admin/access-requests', requirePermission('team.manageUsers'), (req, res) => {
+app.get('/api/admin/access-requests', requirePermission('platform.accessRequests.review'), (req, res) => {
   const rows = db.prepare(`SELECT id, clerk_user_id, email, full_name, request_kind, role_title, organization_name, website, line_of_business, requested_features_json, team_size, authority_attestation, notes, status, review_notes, reviewed_at, activation_token, activated_at, created_at, updated_at FROM access_requests ORDER BY created_at DESC`).all();
   res.json({
     ok: true,
@@ -764,7 +909,7 @@ app.get('/api/admin/access-requests', requirePermission('team.manageUsers'), (re
   });
 });
 
-app.post('/api/admin/access-requests/:id/approve', requirePermission('team.manageUsers'), (req, res) => {
+app.post('/api/admin/access-requests/:id/approve', requirePermission('platform.accessRequests.review'), (req, res) => {
   const request = db.prepare(`SELECT * FROM access_requests WHERE id = ? LIMIT 1`).get(req.params.id);
   if (!request) return res.status(404).json({ ok: false, error: 'Request not found' });
   if (request.status === 'approved') return res.json({ ok: true, alreadyApproved: true });
@@ -811,7 +956,7 @@ app.get('/api/public/access/activation/:token', (req, res) => {
   });
 });
 
-app.post('/api/admin/access-requests/:id/reject', requirePermission('team.manageUsers'), (req, res) => {
+app.post('/api/admin/access-requests/:id/reject', requirePermission('platform.accessRequests.review'), (req, res) => {
   const request = db.prepare(`SELECT * FROM access_requests WHERE id = ? LIMIT 1`).get(req.params.id);
   if (!request) return res.status(404).json({ ok: false, error: 'Request not found' });
   const ts = nowIso();
@@ -819,7 +964,7 @@ app.post('/api/admin/access-requests/:id/reject', requirePermission('team.manage
   res.json({ ok: true, request: { id: request.id, status: 'rejected', reviewedAt: ts } });
 });
 
-app.post('/api/admin/access-requests/:id/needs-follow-up', requirePermission('team.manageUsers'), (req, res) => {
+app.post('/api/admin/access-requests/:id/needs-follow-up', requirePermission('platform.accessRequests.review'), (req, res) => {
   const request = db.prepare(`SELECT * FROM access_requests WHERE id = ? LIMIT 1`).get(req.params.id);
   if (!request) return res.status(404).json({ ok: false, error: 'Request not found' });
   const ts = nowIso();
@@ -844,16 +989,17 @@ app.post('/api/organizations/:id/invitations', requirePermission('team.manageUse
   if (org.workspace_type !== 'business_verified') return res.status(403).json({ ok: false, error: 'Only verified business workspaces can invite users' });
 
   const email = normalizeString(req.body?.email).toLowerCase();
-  const role = normalizeString(req.body?.role) || 'agent';
+  const role = normalizeString(req.body?.role) || 'company_agent';
   if (!email) return res.status(400).json({ ok: false, error: 'email is required' });
-  if (!['admin', 'agent'].includes(role)) return res.status(400).json({ ok: false, error: 'role must be admin or agent' });
+  if (!['company_admin', 'company_agent', 'admin', 'agent'].includes(role)) return res.status(400).json({ ok: false, error: 'role must be company_admin or company_agent' });
 
   const existingInvitation = db.prepare(`SELECT * FROM user_invitations WHERE organization_id = ? AND email = ? AND status = 'pending' LIMIT 1`).get(req.params.id, email);
   if (existingInvitation) return res.json({ ok: true, invitation: existingInvitation, alreadyPending: true });
 
   const invitationId = `inv_${crypto.randomUUID()}`;
   const ts = nowIso();
-  db.prepare(`INSERT INTO user_invitations (id, organization_id, email, role, status, invited_by_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)`).run(invitationId, req.params.id, email, role, req.actor.id, ts, ts);
+  const normalizedRole = role === 'admin' ? 'company_admin' : role === 'agent' ? 'company_agent' : role;
+  db.prepare(`INSERT INTO user_invitations (id, organization_id, email, role, status, invited_by_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)`).run(invitationId, req.params.id, email, normalizedRole, req.actor.id, ts, ts);
   const invitation = db.prepare(`SELECT * FROM user_invitations WHERE id = ? LIMIT 1`).get(invitationId);
   res.status(201).json({ ok: true, invitation });
 });
@@ -896,7 +1042,7 @@ app.post('/api/invitations/:id/accept', requireIdentity, (req, res) => {
 app.get('/api/users', requirePermission('team.manageUsers'), (req, res) => {
   const orgId = getActorOrgId(req);
   const rows = db
-    .prepare(`SELECT * FROM users WHERE organization_id = ? ORDER BY role = 'owner' DESC, created_at ASC`)
+    .prepare(`SELECT * FROM users WHERE organization_id = ? ORDER BY role IN ('platform_owner','company_owner') DESC, created_at ASC`)
     .all(orgId);
 
   res.json({ ok: true, users: rows.map(serializeUser) });
@@ -926,8 +1072,8 @@ app.put('/api/users/:id/permissions', requirePermission('team.manageUsers'), (re
     .get(orgId, req.params.id);
 
   if (!user) return res.status(404).json({ ok: false, error: 'User not found' });
-  if (req.actor.role === 'admin' && user.role === 'owner') {
-    return res.status(403).json({ ok: false, error: 'Admins cannot modify owner permissions' });
+  if (!canManageRole(req.actor.role, user.role)) {
+    return res.status(403).json({ ok: false, error: 'You cannot modify permissions for this user' });
   }
 
   const incoming = req.body?.permissions;
@@ -962,15 +1108,16 @@ app.post('/api/users', requirePermission('team.manageUsers'), (req, res) => {
   const orgId = getActorOrgId(req);
   const fullName = normalizeString(req.body?.fullName);
   const email = normalizeString(req.body?.email).toLowerCase();
-  const role = normalizeString(req.body?.role || 'agent').toLowerCase();
+  const role = normalizeString(req.body?.role || 'company_agent').toLowerCase();
 
   if (!fullName) return res.status(400).json({ ok: false, error: 'fullName is required' });
   if (!email) return res.status(400).json({ ok: false, error: 'email is required' });
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     return res.status(400).json({ ok: false, error: 'email format is invalid' });
   }
-  if (!USER_ROLES.has(role) || role === 'owner') {
-    return res.status(400).json({ ok: false, error: 'role must be one of admin|agent' });
+  const normalizedRole = role === 'admin' ? 'company_admin' : role === 'agent' ? 'company_agent' : role;
+  if (!USER_ROLES.has(normalizedRole) || ['company_owner', 'platform_owner', 'platform_admin', 'platform_sme', 'platform_agent'].includes(normalizedRole)) {
+    return res.status(400).json({ ok: false, error: 'role must be one of company_admin|company_agent' });
   }
 
   const duplicate = db
@@ -983,7 +1130,7 @@ app.post('/api/users', requirePermission('team.manageUsers'), (req, res) => {
   db.prepare(
     `INSERT INTO users (id, organization_id, full_name, email, role, status, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, 'active', ?, ?)`
-  ).run(id, orgId, fullName, email, role, ts, ts);
+  ).run(id, orgId, fullName, email, normalizedRole, ts, ts);
 
   const user = db.prepare(`SELECT * FROM users WHERE id = ? LIMIT 1`).get(id);
   res.status(201).json({ ok: true, user: serializeUser(user) });
@@ -996,8 +1143,8 @@ app.patch('/api/users/:id', requirePermission('team.manageUsers'), (req, res) =>
     .get(orgId, req.params.id);
   if (!existing) return res.status(404).json({ ok: false, error: 'User not found' });
 
-  if (req.actor.role === 'admin' && existing.role === 'owner') {
-    return res.status(403).json({ ok: false, error: 'Admins cannot modify the organization owner' });
+  if (!canManageRole(req.actor.role, existing.role) && req.actor.id !== existing.id) {
+    return res.status(403).json({ ok: false, error: 'You cannot modify this user' });
   }
 
   const fullName = req.body?.fullName == null ? existing.full_name : normalizeString(req.body.fullName);
@@ -1005,22 +1152,23 @@ app.patch('/api/users/:id', requirePermission('team.manageUsers'), (req, res) =>
   const status = req.body?.status == null ? existing.status : normalizeString(req.body.status).toLowerCase();
 
   if (!fullName) return res.status(400).json({ ok: false, error: 'fullName is required' });
-  if (!USER_ROLES.has(role)) return res.status(400).json({ ok: false, error: 'role must be one of owner|admin|agent' });
+  const normalizedRole = role === 'owner' ? 'company_owner' : role === 'admin' ? 'company_admin' : role === 'agent' ? 'company_agent' : role;
+  if (!USER_ROLES.has(normalizedRole)) return res.status(400).json({ ok: false, error: 'role is invalid' });
   if (!USER_STATUSES.has(status)) {
     return res.status(400).json({ ok: false, error: 'status must be one of active|deactivated|suspended' });
   }
 
-  if (existing.role === 'owner' && role !== 'owner') {
-    return res.status(400).json({ ok: false, error: 'Cannot change role for the organization owner' });
+  if (existing.role === 'company_owner' && normalizedRole !== 'company_owner') {
+    return res.status(400).json({ ok: false, error: 'Cannot change role for the company owner' });
   }
 
-  if (role === 'owner' && existing.role !== 'owner') {
-    return res.status(400).json({ ok: false, error: 'Owner assignment is not supported in MVP yet' });
+  if (COMPANY_ROLES.has(existing.role) && PLATFORM_ROLES.has(normalizedRole)) {
+    return res.status(400).json({ ok: false, error: 'Cannot promote company users into platform roles from workspace settings' });
   }
 
   db.prepare(`UPDATE users SET full_name = ?, role = ?, status = ?, updated_at = ? WHERE id = ?`).run(
     fullName,
-    role,
+    normalizedRole,
     status,
     nowIso(),
     req.params.id
@@ -1037,8 +1185,11 @@ app.delete('/api/users/:id', requirePermission('team.manageUsers'), (req, res) =
     .get(orgId, req.params.id);
   if (!existing) return res.status(404).json({ ok: false, error: 'User not found' });
 
-  if (existing.role === 'owner') {
-    return res.status(400).json({ ok: false, error: 'Cannot remove the organization owner' });
+  if (existing.role === 'company_owner' || existing.role === 'platform_owner') {
+    return res.status(400).json({ ok: false, error: 'Cannot remove the protected owner account' });
+  }
+  if (!canManageRole(req.actor.role, existing.role)) {
+    return res.status(403).json({ ok: false, error: 'You cannot remove this user' });
   }
 
   db.prepare(`DELETE FROM users WHERE id = ?`).run(req.params.id);
@@ -1047,7 +1198,7 @@ app.delete('/api/users/:id', requirePermission('team.manageUsers'), (req, res) =
 
 app.get('/api/users-lite', requirePermission('leads.view'), (req, res) => {
   const orgId = getActorOrgId(req);
-  const rows = db.prepare(`SELECT id, full_name, email, role FROM users WHERE organization_id = ? AND status = 'active' ORDER BY role = 'owner' DESC, full_name ASC`).all(orgId);
+  const rows = db.prepare(`SELECT id, full_name, email, role FROM users WHERE organization_id = ? AND status = 'active' ORDER BY role IN ('platform_owner','company_owner') DESC, full_name ASC`).all(orgId);
   res.json({ ok: true, users: rows.map((row) => ({ id: row.id, fullName: row.full_name, email: row.email, role: row.role })) });
 });
 

@@ -43,7 +43,7 @@ export async function followUpBusinessRequestAction(formData: FormData) {
 export async function createInvitationAction(formData: FormData) {
   const organizationId = String(formData.get('organizationId') || '');
   const email = String(formData.get('email') || '').trim();
-  const role = String(formData.get('role') || 'agent').trim();
+  const role = String(formData.get('role') || 'company_agent').trim();
   if (!organizationId || !email) return;
   await internalApiFetch(`/api/organizations/${organizationId}/invitations`, {
     method: 'POST',
