@@ -376,12 +376,12 @@ function resolvePermissions(user) {
 }
 
 
-function getProviderSettings(providerKey) {
-  return db.prepare(`SELECT * FROM email_provider_settings WHERE organization_id = ? AND provider_key = ? LIMIT 1`).get(DEFAULT_ORG_ID, providerKey);
+function getProviderSettings(orgId, providerKey) {
+  return db.prepare(`SELECT * FROM email_provider_settings WHERE organization_id = ? AND provider_key = ? LIMIT 1`).get(orgId, providerKey);
 }
 
-function saveProviderSettingsRow(providerKey, patch = {}) {
-  const existing = getProviderSettings(providerKey);
+function saveProviderSettingsRow(orgId, providerKey, patch = {}) {
+  const existing = getProviderSettings(orgId, providerKey);
   const ts = nowIso();
   const next = {
     status: patch.status ?? existing?.status ?? 'disconnected',
@@ -396,10 +396,10 @@ function saveProviderSettingsRow(providerKey, patch = {}) {
 
   if (existing) {
     db.prepare(`UPDATE email_provider_settings SET status = ?, config_json = ?, client_id = ?, client_secret = ?, redirect_uri = ?, access_token = ?, refresh_token = ?, token_expires_at = ?, updated_at = ? WHERE id = ?`).run(next.status, next.config_json, next.client_id, next.client_secret, next.redirect_uri, next.access_token, next.refresh_token, next.token_expires_at, ts, existing.id);
-    return getProviderSettings(providerKey);
+    return getProviderSettings(orgId, providerKey);
   }
 
-  db.prepare(`INSERT INTO email_provider_settings (id, organization_id, provider_key, status, config_json, client_id, client_secret, redirect_uri, access_token, refresh_token, token_expires_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(`eps_${crypto.randomUUID()}`, DEFAULT_ORG_ID, providerKey, next.status, next.config_json, next.client_id, next.client_secret, next.redirect_uri, next.access_token, next.refresh_token, next.token_expires_at, ts, ts);
+  db.prepare(`INSERT INTO email_provider_settings (id, organization_id, provider_key, status, config_json, client_id, client_secret, redirect_uri, access_token, refresh_token, token_expires_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(`eps_${crypto.randomUUID()}`, orgId, providerKey, next.status, next.config_json, next.client_id, next.client_secret, next.redirect_uri, next.access_token, next.refresh_token, next.token_expires_at, ts, ts);
   return getProviderSettings(providerKey);
 }
 
@@ -484,6 +484,10 @@ function requirePermission(permissionKey) {
       next();
     });
   };
+}
+
+function getActorOrgId(req) {
+  return req.actor?.organization_id || DEFAULT_ORG_ID;
 }
 
 app.get('/health', (_req, res) => res.json({ ok: true }));
@@ -747,18 +751,20 @@ app.post('/api/invitations/:id/accept', requireIdentity, (req, res) => {
   res.json({ ok: true, organization: { id: org.id, name: org.name }, user: { id: userId, email: req.identity.email, role: invitation.role } });
 });
 
-app.get('/api/users', requirePermission('team.manageUsers'), (_req, res) => {
+app.get('/api/users', requirePermission('team.manageUsers'), (req, res) => {
+  const orgId = getActorOrgId(req);
   const rows = db
     .prepare(`SELECT * FROM users WHERE organization_id = ? ORDER BY role = 'owner' DESC, created_at ASC`)
-    .all(DEFAULT_ORG_ID);
+    .all(orgId);
 
   res.json({ ok: true, users: rows.map(serializeUser) });
 });
 
 app.get('/api/users/:id/permissions', requirePermission('team.manageUsers'), (req, res) => {
+  const orgId = getActorOrgId(req);
   const user = db
     .prepare(`SELECT * FROM users WHERE organization_id = ? AND id = ? LIMIT 1`)
-    .get(DEFAULT_ORG_ID, req.params.id);
+    .get(orgId, req.params.id);
 
   if (!user) return res.status(404).json({ ok: false, error: 'User not found' });
 
@@ -772,9 +778,10 @@ app.get('/api/users/:id/permissions', requirePermission('team.manageUsers'), (re
 });
 
 app.put('/api/users/:id/permissions', requirePermission('team.manageUsers'), (req, res) => {
+  const orgId = getActorOrgId(req);
   const user = db
     .prepare(`SELECT * FROM users WHERE organization_id = ? AND id = ? LIMIT 1`)
-    .get(DEFAULT_ORG_ID, req.params.id);
+    .get(orgId, req.params.id);
 
   if (!user) return res.status(404).json({ ok: false, error: 'User not found' });
   if (req.actor.role === 'admin' && user.role === 'owner') {
@@ -810,6 +817,7 @@ app.put('/api/users/:id/permissions', requirePermission('team.manageUsers'), (re
 });
 
 app.post('/api/users', requirePermission('team.manageUsers'), (req, res) => {
+  const orgId = getActorOrgId(req);
   const fullName = normalizeString(req.body?.fullName);
   const email = normalizeString(req.body?.email).toLowerCase();
   const role = normalizeString(req.body?.role || 'agent').toLowerCase();
@@ -825,7 +833,7 @@ app.post('/api/users', requirePermission('team.manageUsers'), (req, res) => {
 
   const duplicate = db
     .prepare(`SELECT id FROM users WHERE organization_id = ? AND email = ? LIMIT 1`)
-    .get(DEFAULT_ORG_ID, email);
+    .get(orgId, email);
   if (duplicate) return res.status(409).json({ ok: false, error: 'A user with this email already exists' });
 
   const id = `usr_${crypto.randomUUID()}`;
@@ -833,16 +841,17 @@ app.post('/api/users', requirePermission('team.manageUsers'), (req, res) => {
   db.prepare(
     `INSERT INTO users (id, organization_id, full_name, email, role, status, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, 'active', ?, ?)`
-  ).run(id, DEFAULT_ORG_ID, fullName, email, role, ts, ts);
+  ).run(id, orgId, fullName, email, role, ts, ts);
 
   const user = db.prepare(`SELECT * FROM users WHERE id = ? LIMIT 1`).get(id);
   res.status(201).json({ ok: true, user: serializeUser(user) });
 });
 
 app.patch('/api/users/:id', requirePermission('team.manageUsers'), (req, res) => {
+  const orgId = getActorOrgId(req);
   const existing = db
     .prepare(`SELECT * FROM users WHERE organization_id = ? AND id = ? LIMIT 1`)
-    .get(DEFAULT_ORG_ID, req.params.id);
+    .get(orgId, req.params.id);
   if (!existing) return res.status(404).json({ ok: false, error: 'User not found' });
 
   if (req.actor.role === 'admin' && existing.role === 'owner') {
@@ -880,9 +889,10 @@ app.patch('/api/users/:id', requirePermission('team.manageUsers'), (req, res) =>
 });
 
 app.delete('/api/users/:id', requirePermission('team.manageUsers'), (req, res) => {
+  const orgId = getActorOrgId(req);
   const existing = db
     .prepare(`SELECT * FROM users WHERE organization_id = ? AND id = ? LIMIT 1`)
-    .get(DEFAULT_ORG_ID, req.params.id);
+    .get(orgId, req.params.id);
   if (!existing) return res.status(404).json({ ok: false, error: 'User not found' });
 
   if (existing.role === 'owner') {
@@ -893,8 +903,9 @@ app.delete('/api/users/:id', requirePermission('team.manageUsers'), (req, res) =
   res.json({ ok: true, removedUserId: req.params.id });
 });
 
-app.get('/api/users-lite', requirePermission('leads.view'), (_req, res) => {
-  const rows = db.prepare(`SELECT id, full_name, email, role FROM users WHERE organization_id = ? AND status = 'active' ORDER BY role = 'owner' DESC, full_name ASC`).all(DEFAULT_ORG_ID);
+app.get('/api/users-lite', requirePermission('leads.view'), (req, res) => {
+  const orgId = getActorOrgId(req);
+  const rows = db.prepare(`SELECT id, full_name, email, role FROM users WHERE organization_id = ? AND status = 'active' ORDER BY role = 'owner' DESC, full_name ASC`).all(orgId);
   res.json({ ok: true, users: rows.map((row) => ({ id: row.id, fullName: row.full_name, email: row.email, role: row.role })) });
 });
 
@@ -950,13 +961,14 @@ app.post('/api/leads/duplicates', requirePermission('leads.view'), (req, res) =>
   res.json({ ok: true, duplicate });
 });
 
-app.get('/api/leads', (req, res) => {
+app.get('/api/leads', requirePermission('leads.view'), (req, res) => {
+  const orgId = getActorOrgId(req);
   const status = normalizeString(req.query.status).toLowerCase();
   const urgency = normalizeString(req.query.urgency).toLowerCase();
   const limit = Math.min(Number(req.query.limit || 50), 200);
 
   const conditions = ['l.organization_id = ?'];
-  const params = [DEFAULT_ORG_ID];
+  const params = [orgId];
 
   if (status) {
     conditions.push('l.status = ?');
@@ -979,23 +991,25 @@ app.get('/api/leads', (req, res) => {
   res.json({ ok: true, leads: rows.map(serializeLead) });
 });
 
-app.get('/api/leads/:id', (req, res) => {
+app.get('/api/leads/:id', requirePermission('leads.view'), (req, res) => {
+  const orgId = getActorOrgId(req);
   const row = db
     .prepare(`SELECT l.*, au.full_name AS assigned_user_name, ou.full_name AS owner_user_name
               FROM leads l
               LEFT JOIN users au ON au.id = l.assigned_user_id
               LEFT JOIN users ou ON ou.id = l.owner_user_id
               WHERE l.organization_id = ? AND l.id = ? LIMIT 1`)
-    .get(DEFAULT_ORG_ID, req.params.id);
+    .get(orgId, req.params.id);
 
   if (!row) return res.status(404).json({ ok: false, error: 'Lead not found' });
   res.json({ ok: true, lead: serializeLead(row) });
 });
 
-app.patch('/api/leads/:id', (req, res) => {
+app.patch('/api/leads/:id', requirePermission('leads.edit'), (req, res) => {
+  const orgId = getActorOrgId(req);
   const existing = db
     .prepare(`SELECT * FROM leads WHERE organization_id = ? AND id = ? LIMIT 1`)
-    .get(DEFAULT_ORG_ID, req.params.id);
+    .get(orgId, req.params.id);
   if (!existing) return res.status(404).json({ ok: false, error: 'Lead not found' });
 
   const fullName = req.body?.fullName == null ? existing.full_name : normalizeString(req.body.fullName);
@@ -1028,7 +1042,7 @@ app.patch('/api/leads/:id', (req, res) => {
        VALUES (?, ?, ?, 'lead.updated', ?, ?)`
     ).run(
       eventId,
-      DEFAULT_ORG_ID,
+      orgId,
       req.params.id,
       JSON.stringify({ fullName, email: emailRaw || null, phone: phoneRaw || null, source, message: message || null, urgencyStatus, assignedUserId, ownerUserId }),
       ts
@@ -1041,18 +1055,20 @@ app.patch('/api/leads/:id', (req, res) => {
   res.json({ ok: true, lead: serializeLead(updated) });
 });
 
-app.get('/api/leads/:id/events', (req, res) => {
+app.get('/api/leads/:id/events', requirePermission('leads.view'), (req, res) => {
+  const orgId = getActorOrgId(req);
   const rows = db
     .prepare(
       `SELECT id, event_type, payload_json, created_at FROM events WHERE organization_id = ? AND lead_id = ? ORDER BY created_at DESC LIMIT 50`
     )
-    .all(DEFAULT_ORG_ID, req.params.id)
+    .all(orgId, req.params.id)
     .map((r) => ({ id: r.id, eventType: r.event_type, payload: r.payload_json ? JSON.parse(r.payload_json) : null, createdAt: r.created_at }));
 
   res.json({ ok: true, events: rows });
 });
 
 app.get('/api/leads/:id/communications', requirePermission('communications.view'), (req, res) => {
+  const orgId = getActorOrgId(req);
   const rows = db
     .prepare(
       `SELECT id, channel, direction, actor_type, actor_name, subject, summary, content, occurred_at
@@ -1060,7 +1076,7 @@ app.get('/api/leads/:id/communications', requirePermission('communications.view'
        WHERE organization_id = ? AND lead_id = ?
        ORDER BY occurred_at DESC, created_at DESC`
     )
-    .all(DEFAULT_ORG_ID, req.params.id)
+    .all(orgId, req.params.id)
     .map((row) => ({
       id: row.id,
       channel: row.channel,
@@ -1077,9 +1093,10 @@ app.get('/api/leads/:id/communications', requirePermission('communications.view'
 });
 
 app.post('/api/leads/:id/communications', requirePermission('communications.create'), (req, res) => {
+  const orgId = getActorOrgId(req);
   const existing = db
     .prepare(`SELECT * FROM leads WHERE organization_id = ? AND id = ? LIMIT 1`)
-    .get(DEFAULT_ORG_ID, req.params.id);
+    .get(orgId, req.params.id);
   if (!existing) return res.status(404).json({ ok: false, error: 'Lead not found' });
 
   const channel = normalizeString(req.body?.channel).toLowerCase();
@@ -1106,12 +1123,12 @@ app.post('/api/leads/:id/communications', requirePermission('communications.crea
     db.prepare(
       `INSERT INTO communications (id, organization_id, lead_id, channel, direction, actor_type, actor_name, subject, summary, content, occurred_at, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, 'user', ?, ?, ?, ?, ?, ?, ?)`
-    ).run(communicationId, DEFAULT_ORG_ID, req.params.id, channel, direction, req.actor?.full_name || 'Team User', subject, summary || content, content || summary, ts, ts, ts);
+    ).run(communicationId, orgId, req.params.id, channel, direction, req.actor?.full_name || 'Team User', subject, summary || content, content || summary, ts, ts, ts);
 
     db.prepare(
       `INSERT INTO events (id, organization_id, lead_id, event_type, payload_json, created_at)
        VALUES (?, ?, ?, 'lead.communication_added', ?, ?)`
-    ).run(eventId, DEFAULT_ORG_ID, req.params.id, JSON.stringify({ channel, direction, subject, summary }), ts);
+    ).run(eventId, orgId, req.params.id, JSON.stringify({ channel, direction, subject, summary }), ts);
 
     db.prepare(`UPDATE leads SET last_contacted_at = ?, updated_at = ? WHERE id = ?`).run(ts, ts, req.params.id);
   });
@@ -1135,6 +1152,7 @@ app.post('/api/leads/:id/communications', requirePermission('communications.crea
 });
 
 app.get('/api/leads/:id/notes', requirePermission('notes.viewInternal'), (req, res) => {
+  const orgId = getActorOrgId(req);
   const rows = db
     .prepare(
       `SELECT n.id, n.content, n.note_type, n.created_at, COALESCE(u.full_name, 'System') AS author_name
@@ -1143,7 +1161,7 @@ app.get('/api/leads/:id/notes', requirePermission('notes.viewInternal'), (req, r
        WHERE n.organization_id = ? AND n.lead_id = ?
        ORDER BY n.created_at DESC`
     )
-    .all(DEFAULT_ORG_ID, req.params.id)
+    .all(orgId, req.params.id)
     .map((row) => ({
       id: row.id,
       content: row.content,
@@ -1156,9 +1174,10 @@ app.get('/api/leads/:id/notes', requirePermission('notes.viewInternal'), (req, r
 });
 
 app.post('/api/leads/:id/notes', requirePermission('notes.createInternal'), (req, res) => {
+  const orgId = getActorOrgId(req);
   const existing = db
     .prepare(`SELECT * FROM leads WHERE organization_id = ? AND id = ? LIMIT 1`)
-    .get(DEFAULT_ORG_ID, req.params.id);
+    .get(orgId, req.params.id);
   if (!existing) return res.status(404).json({ ok: false, error: 'Lead not found' });
 
   const content = normalizeString(req.body?.content);
@@ -1173,12 +1192,12 @@ app.post('/api/leads/:id/notes', requirePermission('notes.createInternal'), (req
     db.prepare(
       `INSERT INTO notes (id, organization_id, lead_id, author_user_id, note_type, content, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(noteId, DEFAULT_ORG_ID, req.params.id, req.actor.id, noteType, content, ts, ts);
+    ).run(noteId, orgId, req.params.id, req.actor.id, noteType, content, ts, ts);
 
     db.prepare(
       `INSERT INTO events (id, organization_id, lead_id, event_type, payload_json, created_at)
        VALUES (?, ?, ?, 'lead.note_added', ?, ?)`
-    ).run(eventId, DEFAULT_ORG_ID, req.params.id, JSON.stringify({ noteType, content, authorUserId: req.actor.id }), ts);
+    ).run(eventId, orgId, req.params.id, JSON.stringify({ noteType, content, authorUserId: req.actor.id }), ts);
   });
 
   tx();
@@ -1189,10 +1208,11 @@ app.post('/api/leads/:id/notes', requirePermission('notes.createInternal'), (req
   });
 });
 
-app.post('/api/leads/:id/contact-log', (req, res) => {
+app.post('/api/leads/:id/contact-log', requirePermission('communications.create'), (req, res) => {
+  const orgId = getActorOrgId(req);
   const existing = db
     .prepare(`SELECT * FROM leads WHERE organization_id = ? AND id = ? LIMIT 1`)
-    .get(DEFAULT_ORG_ID, req.params.id);
+    .get(orgId, req.params.id);
   if (!existing) return res.status(404).json({ ok: false, error: 'Lead not found' });
 
   const channel = normalizeString(req.body?.channel || 'email').toLowerCase();
@@ -1206,12 +1226,12 @@ app.post('/api/leads/:id/contact-log', (req, res) => {
     db.prepare(
       `INSERT INTO events (id, organization_id, lead_id, event_type, payload_json, created_at)
        VALUES (?, ?, ?, 'lead.manual_contact', ?, ?)`
-    ).run(eventId, DEFAULT_ORG_ID, req.params.id, JSON.stringify({ channel, note }), ts);
+    ).run(eventId, orgId, req.params.id, JSON.stringify({ channel, note }), ts);
 
     db.prepare(
       `INSERT INTO communications (id, organization_id, lead_id, channel, direction, actor_type, actor_name, summary, content, occurred_at, created_at, updated_at)
        VALUES (?, ?, ?, ?, 'outbound', 'user', ?, ?, ?, ?, ?, ?)`
-    ).run(communicationId, DEFAULT_ORG_ID, req.params.id, channel, req.actor?.full_name || 'Team User', note, note, ts, ts, ts);
+    ).run(communicationId, orgId, req.params.id, channel, req.actor?.full_name || 'Team User', note, note, ts, ts, ts);
 
     db.prepare(`UPDATE leads SET last_contacted_at = ?, updated_at = ? WHERE id = ?`).run(ts, ts, req.params.id);
   });
@@ -1221,7 +1241,8 @@ app.post('/api/leads/:id/contact-log', (req, res) => {
   res.json({ ok: true, event: { id: eventId, eventType: 'lead.manual_contact', payload: { channel, note }, createdAt: ts } });
 });
 
-app.patch('/api/leads/:id/status', (req, res) => {
+app.patch('/api/leads/:id/status', requirePermission('leads.updateStatus'), (req, res) => {
+  const orgId = getActorOrgId(req);
   const nextStatus = normalizeString(req.body?.status).toLowerCase();
   if (!LEAD_STATUSES.has(nextStatus)) {
     return res.status(400).json({ ok: false, error: 'status must be one of new|contacted|booked|closed' });
@@ -1229,7 +1250,7 @@ app.patch('/api/leads/:id/status', (req, res) => {
 
   const existing = db
     .prepare(`SELECT * FROM leads WHERE organization_id = ? AND id = ? LIMIT 1`)
-    .get(DEFAULT_ORG_ID, req.params.id);
+    .get(orgId, req.params.id);
   if (!existing) return res.status(404).json({ ok: false, error: 'Lead not found' });
 
   const ts = nowIso();
@@ -1241,7 +1262,7 @@ app.patch('/api/leads/:id/status', (req, res) => {
     db.prepare(
       `INSERT INTO events (id, organization_id, lead_id, event_type, payload_json, created_at)
        VALUES (?, ?, ?, 'lead.status_changed', ?, ?)`
-    ).run(eventId, DEFAULT_ORG_ID, req.params.id, JSON.stringify({ from: existing.status, to: nextStatus }), ts);
+    ).run(eventId, orgId, req.params.id, JSON.stringify({ from: existing.status, to: nextStatus }), ts);
   });
 
   tx();
@@ -1250,7 +1271,8 @@ app.patch('/api/leads/:id/status', (req, res) => {
   res.json({ ok: true, lead: serializeLead(updated) });
 });
 
-app.patch('/api/leads/:id/urgency', (req, res) => {
+app.patch('/api/leads/:id/urgency', requirePermission('leads.edit'), (req, res) => {
+  const orgId = getActorOrgId(req);
   const urgencyStatus = normalizeString(req.body?.urgencyStatus).toLowerCase();
   if (!URGENCY_STATUSES.has(urgencyStatus)) {
     return res.status(400).json({ ok: false, error: 'urgencyStatus is invalid' });
@@ -1258,7 +1280,7 @@ app.patch('/api/leads/:id/urgency', (req, res) => {
 
   const existing = db
     .prepare(`SELECT * FROM leads WHERE organization_id = ? AND id = ? LIMIT 1`)
-    .get(DEFAULT_ORG_ID, req.params.id);
+    .get(orgId, req.params.id);
   if (!existing) return res.status(404).json({ ok: false, error: 'Lead not found' });
 
   const ts = nowIso();
@@ -1270,7 +1292,7 @@ app.patch('/api/leads/:id/urgency', (req, res) => {
     db.prepare(
       `INSERT INTO events (id, organization_id, lead_id, event_type, payload_json, created_at)
        VALUES (?, ?, ?, 'lead.urgency_changed', ?, ?)`
-    ).run(eventId, DEFAULT_ORG_ID, req.params.id, JSON.stringify({ from: existing.urgency_status || 'warm', to: urgencyStatus }), ts);
+    ).run(eventId, orgId, req.params.id, JSON.stringify({ from: existing.urgency_status || 'warm', to: urgencyStatus }), ts);
   });
 
   tx();
@@ -1279,8 +1301,9 @@ app.patch('/api/leads/:id/urgency', (req, res) => {
   res.json({ ok: true, lead: serializeLead(updated) });
 });
 
-app.get('/api/dashboard/summary', requirePermission('reports.view'), (_req, res) => {
-  const rows = db.prepare(`SELECT status, urgency_status, received_at FROM leads WHERE organization_id = ?`).all(DEFAULT_ORG_ID);
+app.get('/api/dashboard/summary', requirePermission('reports.view'), (req, res) => {
+  const orgId = getActorOrgId(req);
+  const rows = db.prepare(`SELECT status, urgency_status, received_at FROM leads WHERE organization_id = ?`).all(orgId);
   const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
   const total = rows.length;
   const byStatus = Object.fromEntries([...LEAD_STATUSES].map((s) => [s, 0]));
@@ -1313,7 +1336,8 @@ app.get('/api/dashboard/summary', requirePermission('reports.view'), (_req, res)
   });
 });
 
-app.get('/api/reports/status-summary', requirePermission('reports.view'), (_req, res) => {
+app.get('/api/reports/status-summary', requirePermission('reports.view'), (req, res) => {
+  const orgId = getActorOrgId(req);
   const rows = db
     .prepare(
       `SELECT status, urgency_status, COUNT(*) AS count
@@ -1322,19 +1346,21 @@ app.get('/api/reports/status-summary', requirePermission('reports.view'), (_req,
        GROUP BY status, urgency_status
        ORDER BY status ASC, urgency_status ASC`
     )
-    .all(DEFAULT_ORG_ID)
+    .all(orgId)
     .map((row) => ({ status: row.status, urgencyStatus: row.urgency_status || 'warm', count: row.count }));
 
   res.json({ ok: true, rows });
 });
 
 app.get('/api/leads/:id/email-drafts', requirePermission('emailDrafts.manage'), (req, res) => {
-  const rows = db.prepare(`SELECT d.id, d.to_email, d.subject, d.body, d.status, d.source, d.created_at, COALESCE(u.full_name, 'System') AS created_by_name FROM email_drafts d LEFT JOIN users u ON u.id = d.created_by_user_id WHERE d.organization_id = ? AND d.lead_id = ? ORDER BY d.created_at DESC`).all(DEFAULT_ORG_ID, req.params.id);
+  const orgId = getActorOrgId(req);
+  const rows = db.prepare(`SELECT d.id, d.to_email, d.subject, d.body, d.status, d.source, d.created_at, COALESCE(u.full_name, 'System') AS created_by_name FROM email_drafts d LEFT JOIN users u ON u.id = d.created_by_user_id WHERE d.organization_id = ? AND d.lead_id = ? ORDER BY d.created_at DESC`).all(orgId, req.params.id);
   res.json({ ok: true, drafts: rows.map((row) => ({ id: row.id, toEmail: row.to_email, subject: row.subject, body: row.body, status: row.status, source: row.source, createdAt: row.created_at, createdByName: row.created_by_name })) });
 });
 
 app.post('/api/leads/:id/email-drafts', requirePermission('emailDrafts.manage'), (req, res) => {
-  const lead = db.prepare(`SELECT * FROM leads WHERE organization_id = ? AND id = ? LIMIT 1`).get(DEFAULT_ORG_ID, req.params.id);
+  const orgId = getActorOrgId(req);
+  const lead = db.prepare(`SELECT * FROM leads WHERE organization_id = ? AND id = ? LIMIT 1`).get(orgId, req.params.id);
   if (!lead) return res.status(404).json({ ok: false, error: 'Lead not found' });
 
   const toEmail = normalizeString(req.body?.toEmail || lead.email).toLowerCase();
@@ -1349,8 +1375,8 @@ app.post('/api/leads/:id/email-drafts', requirePermission('emailDrafts.manage'),
   const eventId = `evt_${crypto.randomUUID()}`;
   const ts = nowIso();
   const tx = db.transaction(() => {
-    db.prepare(`INSERT INTO email_drafts (id, organization_id, lead_id, to_email, subject, body, status, source, created_by_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?)`).run(id, DEFAULT_ORG_ID, req.params.id, toEmail, subject, body, source, req.actor.id, ts, ts);
-    db.prepare(`INSERT INTO events (id, organization_id, lead_id, event_type, payload_json, created_at) VALUES (?, ?, ?, 'lead.email_draft_added', ?, ?)`).run(eventId, DEFAULT_ORG_ID, req.params.id, JSON.stringify({ toEmail, subject, source }), ts);
+    db.prepare(`INSERT INTO email_drafts (id, organization_id, lead_id, to_email, subject, body, status, source, created_by_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?)`).run(id, orgId, req.params.id, toEmail, subject, body, source, req.actor.id, ts, ts);
+    db.prepare(`INSERT INTO events (id, organization_id, lead_id, event_type, payload_json, created_at) VALUES (?, ?, ?, 'lead.email_draft_added', ?, ?)`).run(eventId, orgId, req.params.id, JSON.stringify({ toEmail, subject, source }), ts);
   });
   tx();
   res.status(201).json({ ok: true, draft: { id, toEmail, subject, body, status: 'draft', source, createdAt: ts, createdByName: req.actor.full_name } });
@@ -1360,9 +1386,9 @@ app.get('/api/email/providers', requirePermission('emailOutbox.manage'), (_req, 
   res.json({ ok: true, providers: Object.values(PROVIDERS).map((p) => ({ key: p.key, label: p.label })) });
 });
 
-app.post('/api/email/providers/gmail/bootstrap', requirePermission('emailOutbox.manage'), (_req, res) => {
+app.post('/api/email/providers/gmail/bootstrap', requirePermission('emailOutbox.manage'), (req, res) => {
   const gmail = loadGmailClientConfig();
-  const saved = saveProviderSettingsRow('gmail', {
+  const saved = saveProviderSettingsRow(getActorOrgId(req), 'gmail', {
     status: 'ready_for_auth',
     client_id: gmail.clientId,
     client_secret: gmail.clientSecret,
@@ -1371,8 +1397,9 @@ app.post('/api/email/providers/gmail/bootstrap', requirePermission('emailOutbox.
   res.json({ ok: true, provider: { key: 'gmail', status: saved.status, clientId: saved.client_id, redirectUri: saved.redirect_uri } });
 });
 
-app.get('/api/auth/gmail/start', requirePermission('emailOutbox.manage'), (_req, res) => {
-  const saved = getProviderSettings('gmail') || saveProviderSettingsRow('gmail', {});
+app.get('/api/auth/gmail/start', requirePermission('emailOutbox.manage'), (req, res) => {
+  const orgId = getActorOrgId(req);
+  const saved = getProviderSettings(orgId, 'gmail') || saveProviderSettingsRow(orgId, 'gmail', {});
   const clientId = saved?.client_id;
   const redirectUri = saved?.redirect_uri;
   if (!clientId || !redirectUri) return res.status(400).json({ ok: false, error: 'Gmail provider is missing client configuration' });
@@ -1405,8 +1432,9 @@ app.get('/api/auth/gmail/callback', async (req, res) => {
   }
 });
 
-app.get('/api/email/provider-settings', requirePermission('emailOutbox.manage'), (_req, res) => {
-  const rows = db.prepare(`SELECT provider_key, status, config_json, updated_at FROM email_provider_settings WHERE organization_id = ? ORDER BY provider_key ASC`).all(DEFAULT_ORG_ID);
+app.get('/api/email/provider-settings', requirePermission('emailOutbox.manage'), (req, res) => {
+  const orgId = getActorOrgId(req);
+  const rows = db.prepare(`SELECT provider_key, status, config_json, updated_at FROM email_provider_settings WHERE organization_id = ? ORDER BY provider_key ASC`).all(orgId);
   res.json({ ok: true, providers: Object.values(PROVIDERS).map((provider) => {
     const row = rows.find((r) => r.provider_key === provider.key);
     return {
@@ -1439,12 +1467,14 @@ app.put('/api/email/provider-settings/:providerKey', requirePermission('emailOut
 });
 
 app.get('/api/leads/:id/email-outbox', requirePermission('emailOutbox.manage'), (req, res) => {
-  const rows = db.prepare(`SELECT o.*, COALESCE(u.full_name, 'System') AS created_by_name FROM email_outbox o LEFT JOIN users u ON u.id = o.created_by_user_id WHERE o.organization_id = ? AND o.lead_id = ? ORDER BY o.created_at DESC`).all(DEFAULT_ORG_ID, req.params.id);
+  const orgId = getActorOrgId(req);
+  const rows = db.prepare(`SELECT o.*, COALESCE(u.full_name, 'System') AS created_by_name FROM email_outbox o LEFT JOIN users u ON u.id = o.created_by_user_id WHERE o.organization_id = ? AND o.lead_id = ? ORDER BY o.created_at DESC`).all(orgId, req.params.id);
   res.json({ ok: true, items: rows.map((row) => ({ id: row.id, emailDraftId: row.email_draft_id || null, toEmail: row.to_email, subject: row.subject, body: row.body, providerKey: row.provider_key || 'stub', sendStatus: row.send_status, queuedAt: row.queued_at, sentAt: row.sent_at || null, failedAt: row.failed_at || null, lastError: row.last_error || null, createdAt: row.created_at, createdByName: row.created_by_name })) });
 });
 
 app.post('/api/leads/:id/email-outbox', requirePermission('emailOutbox.manage'), (req, res) => {
-  const lead = db.prepare(`SELECT * FROM leads WHERE organization_id = ? AND id = ? LIMIT 1`).get(DEFAULT_ORG_ID, req.params.id);
+  const orgId = getActorOrgId(req);
+  const lead = db.prepare(`SELECT * FROM leads WHERE organization_id = ? AND id = ? LIMIT 1`).get(orgId, req.params.id);
   if (!lead) return res.status(404).json({ ok: false, error: 'Lead not found' });
 
   const emailDraftId = normalizeString(req.body?.emailDraftId) || null;
@@ -1454,7 +1484,7 @@ app.post('/api/leads/:id/email-outbox', requirePermission('emailOutbox.manage'),
   const providerKey = normalizeString(req.body?.providerKey || 'stub') || 'stub';
 
   if (emailDraftId) {
-    const draft = db.prepare(`SELECT * FROM email_drafts WHERE organization_id = ? AND lead_id = ? AND id = ? LIMIT 1`).get(DEFAULT_ORG_ID, req.params.id, emailDraftId);
+    const draft = db.prepare(`SELECT * FROM email_drafts WHERE organization_id = ? AND lead_id = ? AND id = ? LIMIT 1`).get(orgId, req.params.id, emailDraftId);
     if (!draft) return res.status(404).json({ ok: false, error: 'Email draft not found' });
     toEmail = toEmail || draft.to_email;
     subject = subject || draft.subject;
@@ -1470,8 +1500,8 @@ app.post('/api/leads/:id/email-outbox', requirePermission('emailOutbox.manage'),
   const ts = nowIso();
 
   const tx = db.transaction(() => {
-    db.prepare(`INSERT INTO email_outbox (id, organization_id, lead_id, email_draft_id, to_email, subject, body, provider_key, send_status, queued_at, created_by_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)`).run(id, DEFAULT_ORG_ID, req.params.id, emailDraftId, toEmail, subject, body, providerKey, ts, req.actor.id, ts, ts);
-    db.prepare(`INSERT INTO events (id, organization_id, lead_id, event_type, payload_json, created_at) VALUES (?, ?, ?, 'lead.email_queued', ?, ?)`).run(eventId, DEFAULT_ORG_ID, req.params.id, JSON.stringify({ toEmail, subject, providerKey, emailDraftId }), ts);
+    db.prepare(`INSERT INTO email_outbox (id, organization_id, lead_id, email_draft_id, to_email, subject, body, provider_key, send_status, queued_at, created_by_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)`).run(id, orgId, req.params.id, emailDraftId, toEmail, subject, body, providerKey, ts, req.actor.id, ts, ts);
+    db.prepare(`INSERT INTO events (id, organization_id, lead_id, event_type, payload_json, created_at) VALUES (?, ?, ?, 'lead.email_queued', ?, ?)`).run(eventId, orgId, req.params.id, JSON.stringify({ toEmail, subject, providerKey, emailDraftId }), ts);
   });
   tx();
 
@@ -1479,19 +1509,20 @@ app.post('/api/leads/:id/email-outbox', requirePermission('emailOutbox.manage'),
 });
 
 app.post('/api/email-outbox/:id/process', requirePermission('emailOutbox.manage'), async (req, res) => {
-  const item = db.prepare(`SELECT * FROM email_outbox WHERE id = ? AND organization_id = ? LIMIT 1`).get(req.params.id, DEFAULT_ORG_ID);
+  const orgId = getActorOrgId(req);
+  const item = db.prepare(`SELECT * FROM email_outbox WHERE id = ? AND organization_id = ? LIMIT 1`).get(req.params.id, orgId);
   if (!item) return res.status(404).json({ ok: false, error: 'Outbox item not found' });
   if (item.send_status === 'sent') return res.json({ ok: true, item: { id: item.id, sendStatus: item.send_status, sentAt: item.sent_at } });
 
   const provider = getProvider(item.provider_key || 'stub');
   try {
-    const providerSettings = item.provider_key ? getProviderSettings(item.provider_key) : null;
+    const providerSettings = item.provider_key ? getProviderSettings(item.organization_id, item.provider_key) : null;
     const result = await provider.send({ toEmail: item.to_email, subject: item.subject, body: item.body, providerSettings, saveProviderSettings: (patch) => saveProviderSettingsRow(item.provider_key || 'stub', patch) });
     const ts = nowIso();
     const tx = db.transaction(() => {
       db.prepare(`UPDATE email_outbox SET send_status = 'sent', sent_at = ?, failed_at = NULL, last_error = NULL, updated_at = ? WHERE id = ?`).run(ts, ts, item.id);
-      db.prepare(`INSERT INTO communications (id, organization_id, lead_id, channel, direction, actor_type, actor_name, subject, summary, content, occurred_at, created_at, updated_at) VALUES (?, ?, ?, 'email', 'outbound', 'user', ?, ?, ?, ?, ?, ?, ?)`).run(`com_${crypto.randomUUID()}`, DEFAULT_ORG_ID, item.lead_id, req.actor.full_name, item.subject, 'Email sent from outbox', item.body, ts, ts, ts);
-      db.prepare(`INSERT INTO events (id, organization_id, lead_id, event_type, payload_json, created_at) VALUES (?, ?, ?, 'lead.email_sent', ?, ?)`).run(`evt_${crypto.randomUUID()}`, DEFAULT_ORG_ID, item.lead_id, JSON.stringify({ outboxId: item.id, providerKey: item.provider_key || 'stub', providerMessageId: result.providerMessageId || null }), ts);
+      db.prepare(`INSERT INTO communications (id, organization_id, lead_id, channel, direction, actor_type, actor_name, subject, summary, content, occurred_at, created_at, updated_at) VALUES (?, ?, ?, 'email', 'outbound', 'user', ?, ?, ?, ?, ?, ?, ?)`).run(`com_${crypto.randomUUID()}`, item.organization_id, item.lead_id, req.actor.full_name, item.subject, 'Email sent from outbox', item.body, ts, ts, ts);
+      db.prepare(`INSERT INTO events (id, organization_id, lead_id, event_type, payload_json, created_at) VALUES (?, ?, ?, 'lead.email_sent', ?, ?)`).run(`evt_${crypto.randomUUID()}`, item.organization_id, item.lead_id, JSON.stringify({ outboxId: item.id, providerKey: item.provider_key || 'stub', providerMessageId: result.providerMessageId || null }), ts);
       db.prepare(`UPDATE leads SET last_contacted_at = ?, updated_at = ? WHERE id = ?`).run(ts, ts, item.lead_id);
     });
     tx();
@@ -1504,19 +1535,21 @@ app.post('/api/email-outbox/:id/process', requirePermission('emailOutbox.manage'
   }
 });
 
-app.get('/api/settings/business', requirePermission('settings.manageBusiness'), (_req, res) => {
+app.get('/api/settings/business', requirePermission('settings.manageBusiness'), (req, res) => {
+  const orgId = getActorOrgId(req);
   const row = db
     .prepare(`SELECT * FROM settings WHERE organization_id = ? AND key = ? LIMIT 1`)
-    .get(DEFAULT_ORG_ID, BUSINESS_SETTINGS_KEY);
+    .get(orgId, BUSINESS_SETTINGS_KEY);
 
   const settings = row ? JSON.parse(row.value_json) : defaultBusinessSettings;
   res.json({ ok: true, settings, updatedAt: row?.updated_at || null });
 });
 
 app.put('/api/settings/business', requirePermission('settings.manageBusiness'), (req, res) => {
+  const orgId = getActorOrgId(req);
   const current = db
     .prepare(`SELECT * FROM settings WHERE organization_id = ? AND key = ? LIMIT 1`)
-    .get(DEFAULT_ORG_ID, BUSINESS_SETTINGS_KEY);
+    .get(orgId, BUSINESS_SETTINGS_KEY);
 
   const incoming = req.body || {};
   const next = {
@@ -1537,23 +1570,24 @@ app.put('/api/settings/business', requirePermission('settings.manageBusiness'), 
     db.prepare(
       `INSERT INTO settings (id, organization_id, key, value_json, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?)`
-    ).run(`set_${crypto.randomUUID()}`, DEFAULT_ORG_ID, BUSINESS_SETTINGS_KEY, JSON.stringify(next), ts, ts);
+    ).run(`set_${crypto.randomUUID()}`, orgId, BUSINESS_SETTINGS_KEY, JSON.stringify(next), ts, ts);
   }
 
   db.prepare(`UPDATE organizations SET name = ?, timezone = ?, updated_at = ? WHERE id = ?`).run(
     next.businessName,
     next.timezone,
     ts,
-    DEFAULT_ORG_ID
+    orgId
   );
 
   res.json({ ok: true, settings: next, updatedAt: ts });
 });
 
-app.get('/api/templates/first-response', requirePermission('settings.manageTemplates'), (_req, res) => {
+app.get('/api/templates/first-response', requirePermission('settings.manageTemplates'), (req, res) => {
+  const orgId = getActorOrgId(req);
   const row = db
     .prepare(`SELECT * FROM templates WHERE organization_id = ? AND key = ? LIMIT 1`)
-    .get(DEFAULT_ORG_ID, FIRST_RESPONSE_TEMPLATE_KEY);
+    .get(orgId, FIRST_RESPONSE_TEMPLATE_KEY);
 
   res.json({
     ok: true,
@@ -1569,6 +1603,7 @@ app.get('/api/templates/first-response', requirePermission('settings.manageTempl
 });
 
 app.put('/api/templates/first-response', requirePermission('settings.manageTemplates'), (req, res) => {
+  const orgId = getActorOrgId(req);
   const body = normalizeString(req.body?.body);
   const isEnabled = Boolean(req.body?.isEnabled);
 
@@ -1576,7 +1611,7 @@ app.put('/api/templates/first-response', requirePermission('settings.manageTempl
 
   const row = db
     .prepare(`SELECT * FROM templates WHERE organization_id = ? AND key = ? LIMIT 1`)
-    .get(DEFAULT_ORG_ID, FIRST_RESPONSE_TEMPLATE_KEY);
+    .get(orgId, FIRST_RESPONSE_TEMPLATE_KEY);
 
   const ts = nowIso();
   const versionId = `tplv_${crypto.randomUUID()}`;
@@ -1612,10 +1647,11 @@ app.put('/api/templates/first-response', requirePermission('settings.manageTempl
   });
 });
 
-app.get('/api/templates/first-response/versions', requirePermission('settings.manageTemplates'), (_req, res) => {
+app.get('/api/templates/first-response/versions', requirePermission('settings.manageTemplates'), (req, res) => {
+  const orgId = getActorOrgId(req);
   const row = db
     .prepare(`SELECT id FROM templates WHERE organization_id = ? AND key = ? LIMIT 1`)
-    .get(DEFAULT_ORG_ID, FIRST_RESPONSE_TEMPLATE_KEY);
+    .get(orgId, FIRST_RESPONSE_TEMPLATE_KEY);
 
   const versions = db
     .prepare(
@@ -1628,12 +1664,13 @@ app.get('/api/templates/first-response/versions', requirePermission('settings.ma
 });
 
 app.post('/api/templates/first-response/revert', requirePermission('settings.manageTemplates'), (req, res) => {
+  const orgId = getActorOrgId(req);
   const versionId = normalizeString(req.body?.versionId);
   if (!versionId) return res.status(400).json({ ok: false, error: 'versionId is required' });
 
   const template = db
     .prepare(`SELECT * FROM templates WHERE organization_id = ? AND key = ? LIMIT 1`)
-    .get(DEFAULT_ORG_ID, FIRST_RESPONSE_TEMPLATE_KEY);
+    .get(orgId, FIRST_RESPONSE_TEMPLATE_KEY);
 
   const version = db
     .prepare(`SELECT * FROM template_versions WHERE id = ? AND template_id = ? LIMIT 1`)
