@@ -693,6 +693,27 @@ function getActorOrgId(req) {
 app.get('/health', (_req, res) => res.json({ ok: true }));
 
 app.get('/api/access/me', requireIdentity, (req, res) => {
+  const actor = getActor(req);
+  if (actor && PLATFORM_ROLES.has(actor.role)) {
+    const org = db.prepare(`SELECT * FROM organizations WHERE id = ? LIMIT 1`).get(actor.organization_id);
+    return res.json({
+      ok: true,
+      state: 'approved',
+      workspace: {
+        id: org?.id || actor.organization_id,
+        name: org?.name || DEFAULT_ORG_NAME,
+        workspaceType: 'platform',
+      },
+      user: {
+        id: actor.id,
+        role: actor.role,
+        roleLabel: getRoleDisplayLabel(actor.role),
+        status: actor.status,
+        email: actor.email,
+      },
+    });
+  }
+
   let workspace = getWorkspaceByIdentity(req.identity);
   let pendingRequest = getAccessRequestForIdentity(req.identity);
   const pendingInvitations = db.prepare(`SELECT i.id, i.organization_id, i.email, i.role, i.status, i.created_at, o.name AS organization_name FROM user_invitations i JOIN organizations o ON o.id = i.organization_id WHERE lower(i.email) = ? AND i.status = 'pending' ORDER BY i.created_at DESC`).all(req.identity.email);
