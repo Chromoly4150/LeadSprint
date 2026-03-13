@@ -99,3 +99,17 @@
 - Prioritize top 5 friction/failure fixes
 
 **Deliverable:** pilot case study + v1 launch backlog.
+
+---
+
+## Internal Ops Track — Sandbox, Staging, and Admin
+**Goal:** support safe testing, internal support operations, and live account administration.
+
+- Define Sandbox environment rules for fake-data UX testing
+- Define Staging environment rules for real-system testing with test identities only
+- Create a dedicated Admin surface for internal operations
+- Move request review and account/workspace lookup into Admin
+- Add audited support "View As" request workflow with ticket URL + reason
+- Define internal employee roles and permission tiers
+
+**Deliverable:** internal systems spec + first admin console slice.
