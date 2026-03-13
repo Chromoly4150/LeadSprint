@@ -199,6 +199,30 @@ test('agents cannot access owner/admin-protected routes', async (t) => {
   assert.equal(settingsRes.status, 403);
 });
 
+test('platform owner can create internal platform operators', async (t) => {
+  const api = startApi();
+  t.after(api.cleanup);
+
+  await waitForHealth(api.baseUrl);
+
+  const createInternal = await fetch(`${api.baseUrl}/api/users`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-user-email': 'josiahricheson@gmail.com' },
+    body: JSON.stringify({ fullName: 'Pat Platform', email: 'pat.platform@example.com', role: 'platform_sme' }),
+  });
+  assert.equal(createInternal.status, 201);
+  const createInternalJson = await createInternal.json();
+  assert.equal(createInternalJson.user.role, 'platform_sme');
+  assert.equal(createInternalJson.user.roleLabel, 'SME');
+
+  const companyOwnerCreatePlatform = await fetch(`${api.baseUrl}/api/users`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-user-email': 'owner@leadsprint.local' },
+    body: JSON.stringify({ fullName: 'Nope', email: 'nope.platform@example.com', role: 'platform_agent' }),
+  });
+  assert.equal(companyOwnerCreatePlatform.status, 403);
+});
+
 test('permission overrides can grant agent access to business settings', async (t) => {
   const api = startApi();
   t.after(api.cleanup);

@@ -1136,22 +1136,30 @@ app.post('/api/users', requirePermission('team.manageUsers'), (req, res) => {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     return res.status(400).json({ ok: false, error: 'email format is invalid' });
   }
-  const normalizedRole = role === 'admin' ? 'company_admin' : role === 'agent' ? 'company_agent' : role;
-  if (!USER_ROLES.has(normalizedRole) || ['company_owner', 'platform_owner', 'platform_admin', 'platform_sme', 'platform_agent'].includes(normalizedRole)) {
-    return res.status(400).json({ ok: false, error: 'role must be one of company_admin|company_agent' });
+  const normalizedRole = role === 'owner' ? 'company_owner' : role === 'admin' ? 'company_admin' : role === 'agent' ? 'company_agent' : role;
+  if (!USER_ROLES.has(normalizedRole)) {
+    return res.status(400).json({ ok: false, error: 'role is invalid' });
+  }
+  if (COMPANY_ROLES.has(normalizedRole) && normalizedRole === 'company_owner') {
+    return res.status(400).json({ ok: false, error: 'company_owner creation is not supported here' });
+  }
+  if (PLATFORM_ROLES.has(normalizedRole) && !['platform_owner', 'platform_admin'].includes(req.actor.role)) {
+    return res.status(403).json({ ok: false, error: 'Only platform leadership can create internal operators' });
+  }
+  if (COMPANY_ROLES.has(normalizedRole) && !['company_owner', 'company_admin', 'platform_owner', 'platform_admin'].includes(req.actor.role)) {
+    return res.status(403).json({ ok: false, error: 'You cannot create company users' });
   }
 
-  const duplicate = db
-    .prepare(`SELECT id FROM users WHERE organization_id = ? AND email = ? LIMIT 1`)
-    .get(orgId, email);
+  const duplicate = db.prepare(`SELECT id FROM users WHERE lower(email) = ? LIMIT 1`).get(email);
   if (duplicate) return res.status(409).json({ ok: false, error: 'A user with this email already exists' });
 
+  const targetOrgId = PLATFORM_ROLES.has(normalizedRole) ? DEFAULT_ORG_ID : orgId;
   const id = `usr_${crypto.randomUUID()}`;
   const ts = nowIso();
   db.prepare(
     `INSERT INTO users (id, organization_id, full_name, email, role, status, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, 'active', ?, ?)`
-  ).run(id, orgId, fullName, email, normalizedRole, ts, ts);
+  ).run(id, targetOrgId, fullName, email, normalizedRole, ts, ts);
 
   const user = db.prepare(`SELECT * FROM users WHERE id = ? LIMIT 1`).get(id);
   res.status(201).json({ ok: true, user: serializeUser(user) });

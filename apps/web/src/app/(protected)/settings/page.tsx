@@ -4,6 +4,7 @@ import { internalApiFetch } from '../../../lib/api/internal-api';
 import {
   approveAccessRequestAction,
   bootstrapGmailProviderAction,
+  createInternalUserAction,
   createInvitationAction,
   followUpBusinessRequestAction,
   rejectBusinessRequestAction,
@@ -36,7 +37,7 @@ type AccessRequestRow = {
 };
 type InvitationRow = { id: string; email: string; role: string; status: string; created_at: string };
 
-export default async function SettingsPage() {
+export default async function SettingsPage({ searchParams }: { searchParams?: { message?: string; error?: string; q?: string; roleScope?: string } }) {
   const [usersRes, providersRes, meRes, requestsRes] = await Promise.all([
     internalApiFetch<{ users: UserRow[] }>('/api/users'),
     internalApiFetch<{ providers: ProviderRow[] }>('/api/email/provider-settings'),
@@ -47,6 +48,10 @@ export default async function SettingsPage() {
   let invitationsRes: { invitations: InvitationRow[] } | null = null;
   let orgIdForInvites: string | null = null;
   let workspaceType: string | null = null;
+  const flashMessage = searchParams?.message ? decodeURIComponent(searchParams.message) : null;
+  const flashError = searchParams?.error ? decodeURIComponent(searchParams.error) : null;
+  const roleScope = searchParams?.roleScope === 'company' ? 'company' : 'platform';
+  const requestQuery = (searchParams?.q || '').trim().toLowerCase();
   try {
     const access = await internalApiFetch<{ state: string; workspace?: { id: string; workspaceType: string } }>('/api/access/me');
     workspaceType = access.workspace?.workspaceType || null;
@@ -57,6 +62,14 @@ export default async function SettingsPage() {
   } catch {
     invitationsRes = null;
   }
+
+  const platformUsers = usersRes.users.filter((user) => user.role.startsWith('platform_'));
+  const companyUsers = usersRes.users.filter((user) => !user.role.startsWith('platform_'));
+  const filteredRequests = requestsRes.requests.filter((request) => {
+    if (!requestQuery) return true;
+    const haystack = [request.organization_name, request.full_name, request.email, request.line_of_business || '', request.status].join(' ').toLowerCase();
+    return haystack.includes(requestQuery);
+  });
 
   return (
     <AppShell title="Settings" subtitle="Team, provider, onboarding review, and invite management">
@@ -71,21 +84,48 @@ export default async function SettingsPage() {
         </p>
       </section>
 
+      {flashMessage ? <section style={{ ...cardStyle, marginBottom: 16, border: '1px solid #bbf7d0', background: '#f0fdf4', color: '#166534' }}>{flashMessage}</section> : null}
+      {flashError ? <section style={{ ...cardStyle, marginBottom: 16, border: '1px solid #fecaca', background: '#fef2f2', color: '#991b1b' }}>{flashError}</section> : null}
+
       <section style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: 16 }}>
         <article style={cardStyle}>
-          <h2 style={{ marginTop: 0 }}>Team</h2>
-          <div style={{ display: 'grid', gap: 10 }}>
-            {usersRes.users.map((user) => (
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+            <div>
+              <h2 style={{ marginTop: 0, marginBottom: 4 }}>Operators & team</h2>
+              <p style={{ margin: 0, color: '#6b7280' }}>Platform operators are internal. Company users are customer-facing roles.</p>
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <a href="/settings?roleScope=platform" style={{ padding: '8px 12px', borderRadius: 999, textDecoration: 'none', background: roleScope === 'platform' ? '#111827' : '#e5e7eb', color: roleScope === 'platform' ? '#fff' : '#111827' }}>Platform</a>
+              <a href="/settings?roleScope=company" style={{ padding: '8px 12px', borderRadius: 999, textDecoration: 'none', background: roleScope === 'company' ? '#111827' : '#e5e7eb', color: roleScope === 'company' ? '#fff' : '#111827' }}>Company</a>
+            </div>
+          </div>
+          <div style={{ display: 'grid', gap: 10, marginTop: 12 }}>
+            {(roleScope === 'platform' ? platformUsers : companyUsers).map((user) => (
               <div key={user.id} style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 12 }}>
                 <div style={{ fontWeight: 700 }}>{user.fullName}</div>
                 <div style={{ color: '#6b7280', fontSize: 13 }}>{user.email}</div>
                 <div style={{ color: '#6b7280', fontSize: 12 }}>{user.roleLabel || user.role} · {user.status || 'active'}</div>
               </div>
             ))}
+            {(roleScope === 'platform' ? platformUsers : companyUsers).length === 0 ? <p style={{ margin: 0, color: '#6b7280' }}>No users in this scope yet.</p> : null}
           </div>
+          {meRes.actor.role === 'platform_owner' || meRes.actor.role === 'platform_admin' ? (
+            <form action={createInternalUserAction} style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 14, paddingTop: 14, borderTop: '1px solid #e5e7eb' }}>
+              <input name="fullName" placeholder="Internal operator name" required style={{ ...inputStyle, minWidth: 180 }} />
+              <input name="email" type="email" placeholder="operator@leadsprint.com" required style={{ ...inputStyle, minWidth: 220 }} />
+              <select name="role" defaultValue="platform_agent" style={inputStyle}>
+                <option value="platform_agent">Platform Agent</option>
+                <option value="platform_sme">Platform SME</option>
+                <option value="platform_admin">Platform Admin</option>
+              </select>
+              <button type="submit">Add internal operator</button>
+            </form>
+          ) : null}
         </article>
         <article style={cardStyle}>
-          <h2 style={{ marginTop: 0 }}>Email providers</h2>
+          <h2 style={{ marginTop: 0 }}>Platform controls</h2>
+          <p style={{ marginTop: 0, color: '#6b7280' }}>System-level providers and bootstrap actions for the internal control plane.</p>
+          <h3 style={{ marginBottom: 8 }}>Email providers</h3>
           <div style={{ display: 'grid', gap: 10 }}>
             {providersRes.providers.map((provider) => (
               <div key={provider.key} style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 12, display: 'grid', gap: 8 }}>
@@ -109,10 +149,20 @@ export default async function SettingsPage() {
       </section>
 
       <section style={{ ...cardStyle, marginTop: 16 }}>
-        <h2 style={{ marginTop: 0 }}>Business access requests</h2>
-        <div style={{ display: 'grid', gap: 16 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+          <div>
+            <h2 style={{ marginTop: 0, marginBottom: 4 }}>Platform access review</h2>
+            <p style={{ margin: 0, color: '#6b7280' }}>Review incoming business requests, approve for activation, or send them back for follow-up.</p>
+          </div>
+          <form method="get" action="/settings" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <input type="hidden" name="roleScope" value={roleScope} />
+            <input name="q" defaultValue={searchParams?.q || ''} placeholder="Search org, name, email, status" style={{ ...inputStyle, minWidth: 260 }} />
+            <button type="submit">Filter</button>
+          </form>
+        </div>
+        <div style={{ display: 'grid', gap: 16, marginTop: 14 }}>
           {['pending', 'needs_follow_up', 'approved', 'rejected'].map((statusKey) => {
-            const rows = requestsRes.requests.filter((request) => request.status === statusKey);
+            const rows = filteredRequests.filter((request) => request.status === statusKey);
             return (
               <div key={statusKey} style={{ display: 'grid', gap: 12 }}>
                 <h3 style={{ margin: 0, textTransform: 'capitalize' }}>{statusKey.replaceAll('_', ' ')}</h3>
@@ -126,13 +176,20 @@ export default async function SettingsPage() {
                         <div style={{ color: '#6b7280', fontSize: 13 }}>{request.full_name} · {request.email}</div>
                         <div style={{ color: '#6b7280', fontSize: 12 }}>{request.request_kind === 'individual_workspace' ? 'individual request' : 'business request'} · {request.status} · {request.role_title || 'role not specified'} · {request.line_of_business || 'line of business not provided'}</div>
                       </div>
-                      <div style={{ fontSize: 13, color: '#374151' }}>
+                      <div style={{ fontSize: 13, color: '#374151', display: 'grid', gap: 4 }}>
                         <div>Website: {request.website || '—'}</div>
                         <div>Team size: {request.team_size || '—'}</div>
                         <div>Requested features: {request.requested_features?.join(', ') || '—'}</div>
                         <div>Authority attested: {request.authority_attestation ? 'yes' : 'no'}</div>
                         <div>Activation state: {request.clerk_user_id ? 'Account linked' : request.activation_token ? 'Approved and awaiting activation' : 'Pre-auth request only'}</div>
-                        {request.activation_token ? <div>Activation link: <code>{`/sign-up?activation_token=${request.activation_token}`}</code></div> : null}
+                        <div>Created: {request.created_at}</div>
+                        <div>Updated: {request.updated_at}</div>
+                        {request.activation_token ? (
+                          <div>
+                            Activation link: <a href={`/sign-up?activation_token=${request.activation_token}`} target="_blank">Open activation</a>
+                            <div><code>{`/sign-up?activation_token=${request.activation_token}`}</code></div>
+                          </div>
+                        ) : null}
                         <div>Notes: {request.notes || '—'}</div>
                       </div>
                       {request.status !== 'approved' && request.status !== 'rejected' ? (
@@ -169,7 +226,7 @@ export default async function SettingsPage() {
       </section>
 
       <section style={{ ...cardStyle, marginTop: 16 }}>
-        <h2 style={{ marginTop: 0 }}>Invitations</h2>
+        <h2 style={{ marginTop: 0 }}>Company invitations</h2>
         {orgIdForInvites ? (
           <>
             <form action={createInvitationAction} style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
