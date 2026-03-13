@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { cookies } from 'next/headers';
 import { SignUp } from '@clerk/nextjs';
+import { apiFetch } from '../../../lib/api';
 import { authScaffoldEnabled, getOnboardingRedirectUrl } from '../../../lib/auth/config';
 
 export const metadata = {
@@ -15,9 +16,13 @@ function getSafeRedirectUrl(value?: string) {
   return value;
 }
 
-export default function SignUpPage({ searchParams }: { searchParams?: { invite?: string; approved?: string; redirect_url?: string } }) {
+export default async function SignUpPage({ searchParams }: { searchParams?: { invite?: string; approved?: string; redirect_url?: string; activation_token?: string } }) {
   const hasDraft = Boolean(cookies().get('leadsprint_request_access_draft')?.value);
-  const allowed = Boolean(searchParams?.invite || searchParams?.approved || hasDraft);
+  const activationToken = searchParams?.activation_token || '';
+  const activation = activationToken
+    ? await apiFetch<{ activation: { email: string; fullName: string; organizationName: string; requestKind: string; activatedAt?: string | null } }>(`/api/public/access/activation/${activationToken}`).catch(() => null)
+    : null;
+  const allowed = Boolean(searchParams?.invite || searchParams?.approved || hasDraft || activation);
   const redirectUrl = getSafeRedirectUrl(searchParams?.redirect_url || (hasDraft ? '/request-access?resume=1' : undefined));
 
   if (!authScaffoldEnabled) {
@@ -38,7 +43,7 @@ export default function SignUpPage({ searchParams }: { searchParams?: { invite?:
         <div style={{ maxWidth: 560, background: '#fff', padding: 24, borderRadius: 16, boxShadow: '0 1px 2px rgba(0,0,0,0.05)' }}>
           <h1 style={{ marginTop: 0 }}>Request access first</h1>
           <p>
-            LeadSprint account creation is reserved for invited or approved users. If you’re new here, start with the request-access flow so we can associate your account correctly.
+            LeadSprint account creation is reserved for invited or approved users. If you’re new here, submit the request-access form first and wait for approval before creating an account.
           </p>
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
             <Link href="/request-access">Request access</Link>
@@ -50,7 +55,19 @@ export default function SignUpPage({ searchParams }: { searchParams?: { invite?:
   }
 
   return (
-    <main style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', padding: 24, background: '#f6f7fb' }}>
+    <main style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', padding: 24, background: '#f6f7fb', gap: 16 }}>
+      {activation ? (
+        <div style={{ maxWidth: 520, width: '100%', background: '#fff', padding: 20, borderRadius: 16, boxShadow: '0 1px 2px rgba(0,0,0,0.05)' }}>
+          <h1 style={{ marginTop: 0, fontSize: 24 }}>Activate your approved LeadSprint access</h1>
+          <p style={{ color: '#4b5563' }}>
+            This request was approved for <strong>{activation.activation.organizationName}</strong>. Create your account with the same approved email so LeadSprint can attach it and finish provisioning automatically.
+          </p>
+          <div style={{ fontSize: 14, color: '#374151' }}>
+            <div>Email: {activation.activation.email}</div>
+            <div>Request type: {activation.activation.requestKind === 'individual_workspace' ? 'Individual workspace' : 'Business workspace'}</div>
+          </div>
+        </div>
+      ) : null}
       <SignUp signInUrl="/sign-in" forceRedirectUrl={redirectUrl} fallbackRedirectUrl={redirectUrl} />
     </main>
   );

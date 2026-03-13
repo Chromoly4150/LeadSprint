@@ -2,6 +2,7 @@
 
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
+import { apiFetch } from '../../lib/api';
 import { internalApiFetch } from '../../lib/api/internal-api';
 import { getCurrentAuthUser } from '../../lib/auth/current-user';
 
@@ -38,8 +39,12 @@ export async function submitIndividualAccessRequest(formData: FormData) {
   };
 
   if (!currentUser) {
-    setDraftCookie({ path: 'individual', payload });
-    redirect('/sign-up?approved=1&redirect_url=/request-access?resume=1');
+    await apiFetch('/api/public/access/individual', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    cookies().delete(DRAFT_COOKIE);
+    redirect('/request-access?submitted=individual');
   }
 
   await internalApiFetch('/api/access/individual', {
@@ -72,8 +77,12 @@ export async function submitBusinessAccessRequest(formData: FormData) {
   };
 
   if (!currentUser) {
-    setDraftCookie({ path: 'business', payload });
-    redirect('/sign-up?approved=1&redirect_url=/request-access?resume=1');
+    await apiFetch('/api/public/access/business-request', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    cookies().delete(DRAFT_COOKIE);
+    redirect('/request-access?submitted=business');
   }
 
   await internalApiFetch('/api/access/business-request', {

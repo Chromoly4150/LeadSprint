@@ -68,7 +68,7 @@ export const metadata = {
   },
 };
 
-export default async function RequestAccessPage({ searchParams }: { searchParams?: { resume?: string } }) {
+export default async function RequestAccessPage({ searchParams }: { searchParams?: { resume?: string; submitted?: string } }) {
   const currentUser = await getCurrentAuthUser();
   const state = await getProvisioningState();
   const draft = getDraft();
@@ -81,6 +81,7 @@ export default async function RequestAccessPage({ searchParams }: { searchParams
   const individualDraft = draft.path === 'individual' ? draft : {};
   const businessDraft = draft.path === 'business' ? draft : {};
   const businessSelected = searchParams?.resume === '1' ? draft.path === 'business' : true;
+  const submittedKind = searchParams?.submitted === 'individual' || searchParams?.submitted === 'business' ? searchParams.submitted : null;
 
   return (
     <main style={{ background: '#f8fafc', minHeight: '100vh' }}>
@@ -96,12 +97,20 @@ export default async function RequestAccessPage({ searchParams }: { searchParams
             <Link href="#business-request" style={{ background: '#fff', color: '#111827', padding: '12px 18px', borderRadius: 10, textDecoration: 'none', border: '1px solid #d1d5db' }}>Business request</Link>
             <Link href="/sign-in" style={{ color: '#111827', alignSelf: 'center' }}>Already approved or invited? Sign in</Link>
           </div>
+          {submittedKind ? (
+            <div style={{ ...cardStyle, padding: 18, borderColor: '#bfdbfe', background: '#eff6ff' }}>
+              <strong>{submittedKind === 'individual' ? 'Individual access request received.' : 'Business access request received.'}</strong>
+              <p style={{ marginBottom: 0, color: '#1f2937' }}>
+                We saved your request for review. Do not create an account unless LeadSprint approves or invites you. If you already have approval, use the activation path you were given; otherwise wait for follow-up by email.
+              </p>
+            </div>
+          ) : null}
           <div style={{ ...cardStyle, padding: 18 }}>
             <strong>{currentUser ? 'Signed in and ready to submit.' : 'No account yet? That’s fine.'}</strong>
             <p style={{ marginBottom: 0, color: '#4b5563' }}>
               {currentUser
                 ? `Your request will be submitted using ${currentUser.email || 'your authenticated account'} and then move into review.`
-                : 'Fill out the request first. We’ll carry your details into the secure account step so you do not have to start over, then we’ll show a confirmation once the request is received.'}
+                : 'Fill out the request first. We’ll save the request immediately and only move into account activation after approval or invitation.'}
             </p>
           </div>
         </div>
@@ -142,7 +151,7 @@ export default async function RequestAccessPage({ searchParams }: { searchParams
           </label>
           <p style={{ margin: 0, color: '#4b5563' }}>If you later need a multi-user business workspace, that upgrade may require manual migration rather than an instant in-place conversion.</p>
           <button type="submit" style={{ width: 'fit-content', padding: '12px 18px', borderRadius: 10, background: '#111827', color: '#fff', border: 0 }}>
-            {currentUser ? 'Create individual workspace' : 'Continue with individual request'}
+            {currentUser ? 'Submit individual request' : 'Submit individual request'}
           </button>
         </form>
       </section>
@@ -222,7 +231,7 @@ export default async function RequestAccessPage({ searchParams }: { searchParams
             />
           </label>
           <button type="submit" style={{ width: 'fit-content', padding: '12px 18px', borderRadius: 10, background: '#111827', color: '#fff', border: 0 }}>
-            {currentUser ? 'Submit business request' : 'Continue with business request'}
+            {currentUser ? 'Submit business request' : 'Submit business request'}
           </button>
         </form>
       </section>

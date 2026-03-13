@@ -232,3 +232,134 @@ test('permission overrides can grant agent access to business settings', async (
   const mePermsJson = await mePermsRes.json();
   assert.equal(mePermsJson.permissions['settings.manageBusiness'], true);
 });
+
+test('public business request can be approved into activation flow and auto-provision after sign-in', async (t) => {
+  const api = startApi();
+  t.after(api.cleanup);
+
+  await waitForHealth(api.baseUrl);
+
+  const submitRes = await fetch(`${api.baseUrl}/api/public/access/business-request`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      fullName: 'Pat Owner',
+      email: 'pat@example.com',
+      roleTitle: 'Owner',
+      organizationName: 'Pat Plumbing',
+      website: 'https://patplumbing.example.com',
+      lineOfBusiness: 'plumbing',
+      teamSize: '1-5',
+      requestedFeatures: ['lead_intake', 'reporting'],
+      authorityAttestation: true,
+      notes: 'Need reviewed setup',
+    }),
+  });
+  assert.equal(submitRes.status, 201);
+  const submitJson = await submitRes.json();
+  assert.equal(submitJson.ok, true);
+  assert.equal(submitJson.request.status, 'pending');
+
+  const beforeApprovalLookup = await fetch(`${api.baseUrl}/api/public/access/activation/not-a-real-token`);
+  assert.equal(beforeApprovalLookup.status, 404);
+
+  const requestsRes = await fetch(`${api.baseUrl}/api/admin/access-requests`, {
+    headers: { 'x-user-email': 'owner@leadsprint.local' },
+  });
+  assert.equal(requestsRes.status, 200);
+  const requestsJson = await requestsRes.json();
+  const request = requestsJson.requests.find((row) => row.email === 'pat@example.com');
+  assert.ok(request, 'expected submitted access request to exist');
+  assert.equal(request.status, 'pending');
+  assert.equal(request.clerk_user_id, null);
+
+  const approveRes = await fetch(`${api.baseUrl}/api/admin/access-requests/${request.id}/approve`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-user-email': 'owner@leadsprint.local' },
+    body: JSON.stringify({ reviewNotes: 'Approved for activation' }),
+  });
+  assert.equal(approveRes.status, 200);
+  const approveJson = await approveRes.json();
+  assert.equal(approveJson.ok, true);
+  assert.equal(approveJson.awaitingActivation, true);
+  assert.match(approveJson.activationUrl, /^\/sign-up\?activation_token=/);
+  assert.ok(approveJson.request.activationToken);
+
+  const activationLookup = await fetch(`${api.baseUrl}/api/public/access/activation/${approveJson.request.activationToken}`);
+  assert.equal(activationLookup.status, 200);
+  const activationJson = await activationLookup.json();
+  assert.equal(activationJson.ok, true);
+  assert.equal(activationJson.activation.email, 'pat@example.com');
+  assert.equal(activationJson.activation.organizationName, 'Pat Plumbing');
+  assert.equal(activationJson.activation.requestKind, 'business_workspace');
+
+  const meBeforeProvision = await fetch(`${api.baseUrl}/api/access/me`, {
+    headers: {
+      'x-user-email': 'pat@example.com',
+      'x-clerk-user-id': 'clerk_pat_123',
+    },
+  });
+  assert.equal(meBeforeProvision.status, 200);
+  const meBeforeProvisionJson = await meBeforeProvision.json();
+  assert.equal(meBeforeProvisionJson.ok, true);
+  assert.equal(meBeforeProvisionJson.state, 'approved');
+  assert.equal(meBeforeProvisionJson.workspace.name, 'Pat Plumbing');
+  assert.equal(meBeforeProvisionJson.workspace.workspaceType, 'business_verified');
+  assert.equal(meBeforeProvisionJson.user.email, 'pat@example.com');
+
+  const meAfterProvision = await fetch(`${api.baseUrl}/api/access/me`, {
+    headers: {
+      'x-user-email': 'pat@example.com',
+      'x-clerk-user-id': 'clerk_pat_123',
+    },
+  });
+  assert.equal(meAfterProvision.status, 200);
+  const meAfterProvisionJson = await meAfterProvision.json();
+  assert.equal(meAfterProvisionJson.state, 'approved');
+
+  const requestsAfterRes = await fetch(`${api.baseUrl}/api/admin/access-requests`, {
+    headers: { 'x-user-email': 'owner@leadsprint.local' },
+  });
+  const requestsAfterJson = await requestsAfterRes.json();
+  const requestAfter = requestsAfterJson.requests.find((row) => row.id === request.id);
+  assert.equal(requestAfter.status, 'approved');
+  assert.equal(requestAfter.clerk_user_id, 'clerk_pat_123');
+  assert.equal(requestAfter.activation_token, null);
+  assert.ok(requestAfter.activated_at);
+});
+
+test('activation endpoint rejects pending requests before approval', async (t) => {
+  const api = startApi();
+  t.after(api.cleanup);
+
+  await waitForHealth(api.baseUrl);
+
+  const submitRes = await fetch(`${api.baseUrl}/api/public/access/individual`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      fullName: 'Indy Solo',
+      email: 'indy@example.com',
+      workspaceName: 'Indy Solo',
+      lineOfBusiness: 'consulting',
+      useCase: 'solo workflow',
+      notes: 'please review',
+    }),
+  });
+  assert.equal(submitRes.status, 201);
+
+  const requestsRes = await fetch(`${api.baseUrl}/api/admin/access-requests`, {
+    headers: { 'x-user-email': 'owner@leadsprint.local' },
+  });
+  const requestsJson = await requestsRes.json();
+  const request = requestsJson.requests.find((row) => row.email === 'indy@example.com');
+  assert.ok(request);
+  assert.equal(request.status, 'pending');
+  assert.equal(request.activation_token, null);
+
+  const missingTokenLookup = await fetch(`${api.baseUrl}/api/public/access/activation/not-a-real-token`);
+  assert.equal(missingTokenLookup.status, 404);
+  const missingTokenJson = await missingTokenLookup.json();
+  assert.equal(missingTokenJson.ok, false);
+  assert.match(missingTokenJson.error, /Activation token not found/);
+});

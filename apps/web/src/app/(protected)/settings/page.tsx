@@ -28,6 +28,9 @@ type AccessRequestRow = {
   request_kind: string;
   status: string;
   review_notes?: string | null;
+  clerk_user_id?: string | null;
+  activation_token?: string | null;
+  activated_at?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -128,6 +131,8 @@ export default async function SettingsPage() {
                         <div>Team size: {request.team_size || '—'}</div>
                         <div>Requested features: {request.requested_features?.join(', ') || '—'}</div>
                         <div>Authority attested: {request.authority_attestation ? 'yes' : 'no'}</div>
+                        <div>Activation state: {request.clerk_user_id ? 'Account linked' : request.activation_token ? 'Approved and awaiting activation' : 'Pre-auth request only'}</div>
+                        {request.activation_token ? <div>Activation link: <code>{`/sign-up?activation_token=${request.activation_token}`}</code></div> : null}
                         <div>Notes: {request.notes || '—'}</div>
                       </div>
                       {request.status !== 'approved' && request.status !== 'rejected' ? (
@@ -135,7 +140,7 @@ export default async function SettingsPage() {
                           <form action={approveAccessRequestAction} style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                             <input type="hidden" name="requestId" value={request.id} />
                             <input name="reviewNotes" placeholder="Approval notes (optional)" style={{ ...inputStyle, minWidth: 260 }} />
-                            <button type="submit">Approve business</button>
+                            <button type="submit">{request.clerk_user_id ? 'Approve + provision' : 'Approve for activation'}</button>
                           </form>
                           <form action={followUpBusinessRequestAction} style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                             <input type="hidden" name="requestId" value={request.id} />
@@ -148,9 +153,12 @@ export default async function SettingsPage() {
                             <button type="submit">Reject</button>
                           </form>
                         </div>
-                      ) : request.review_notes ? (
-                        <p style={{ margin: 0, color: '#6b7280', fontSize: 13 }}>Review notes: {request.review_notes}</p>
-                      ) : null}
+                      ) : (
+                        <div style={{ display: 'grid', gap: 6 }}>
+                          {request.review_notes ? <p style={{ margin: 0, color: '#6b7280', fontSize: 13 }}>Review notes: {request.review_notes}</p> : null}
+                          {request.activation_token ? <p style={{ margin: 0, color: '#6b7280', fontSize: 13 }}>Share activation path with approved user: <code>{`/sign-up?activation_token=${request.activation_token}`}</code></p> : null}
+                        </div>
+                      )}
                     </div>
                   ))
                 )}
