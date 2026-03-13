@@ -100,8 +100,8 @@ export default async function RequestAccessPage({ searchParams }: { searchParams
             <strong>{currentUser ? 'Signed in and ready to submit.' : 'No account yet? That’s fine.'}</strong>
             <p style={{ marginBottom: 0, color: '#4b5563' }}>
               {currentUser
-                ? `Your request will be submitted using ${currentUser.email || 'your authenticated account'} after you choose the right path below.`
-                : 'Fill out the request first. If we need identity before submission, we’ll carry your details forward into the secure account step instead of making you start over.'}
+                ? `Your request will be submitted using ${currentUser.email || 'your authenticated account'} and then move into review.`
+                : 'Fill out the request first. We’ll carry your details into the secure account step so you do not have to start over, then we’ll show a confirmation once the request is received.'}
             </p>
           </div>
         </div>
@@ -112,7 +112,7 @@ export default async function RequestAccessPage({ searchParams }: { searchParams
           <div>
             <div style={{ fontSize: 12, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#6b7280' }}>Solo use</div>
             <h2 style={{ margin: '8px 0 4px' }}>Request an individual workspace</h2>
-            <p style={{ margin: 0, color: '#4b5563' }}>For sole proprietors and one-person operations. Individual workspaces stay solo and cannot invite teammates.</p>
+            <p style={{ margin: 0, color: '#4b5563' }}>For sole proprietors and one-person operations. Individual workspaces stay solo and cannot invite teammates, and new requests now go through review before activation.</p>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12 }}>
             <label>

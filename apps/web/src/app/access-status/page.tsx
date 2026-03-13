@@ -34,15 +34,19 @@ export default async function AccessStatusPage() {
     );
   }
 
+  const isIndividual = state.request?.requestKind === 'individual_workspace';
+
   const titleMap = {
-    pending: 'Business request pending',
+    pending: isIndividual ? 'Request received' : 'Request received',
     needs_follow_up: 'More information needed',
-    rejected: 'Business request not approved',
+    rejected: 'Request not approved',
   } as const;
 
   const subtitleMap = {
-    pending: 'We have your request and still need to review it before enabling a verified business workspace.',
-    needs_follow_up: 'We need a bit more information before we can approve this business workspace.',
+    pending: isIndividual
+      ? 'We got your LeadSprint access request. Someone will follow up by email before activation.'
+      : 'We got your business workspace request. Someone will review it and follow up by email before activation.',
+    needs_follow_up: 'We need a bit more information before we can approve this request.',
     rejected: 'This request was not approved in its current form.',
   } as const;
 
@@ -51,20 +55,26 @@ export default async function AccessStatusPage() {
   return (
     <AppShell title={titleMap[state.state]} subtitle={subtitleMap[state.state]}>
       <section style={cardStyle}>
-        <h2 style={{ marginTop: 0 }}>Request summary</h2>
+        <h2 style={{ marginTop: 0 }}>What happens next</h2>
         <ul>
-          <li>Organization: {request?.organizationName || '—'}</li>
+          <li>Request type: {request?.requestKind === 'individual_workspace' ? 'Individual workspace request' : 'Verified business workspace request'}</li>
+          <li>Name: {request?.organizationName || '—'}</li>
           <li>Status: {state.state.replaceAll('_', ' ')}</li>
           <li>Submitted / updated: {request?.updatedAt || request?.createdAt || '—'}</li>
         </ul>
+        {state.state === 'pending' ? (
+          <p>
+            We’ll follow up by email to complete the process. For now, assume someone from <strong>sales@leadsprint.com</strong> or a similar LeadSprint address will contact you with next steps.
+          </p>
+        ) : null}
         {state.invitations && state.invitations.length > 0 ? (
           <p>You also have pending invitations from an existing verified business workspace below.</p>
         ) : null}
         <p>
-          If you work for a company that already uses LeadSprint, ask your workspace owner or admin for an invite instead of submitting a public team-member request.
+          If you work for a company that already uses LeadSprint, ask your workspace owner or admin for an invite instead of submitting a new public request.
         </p>
         <p style={{ marginBottom: 0 }}>
-          <Link href="/onboarding">Back to onboarding choices</Link>
+          <Link href="/sign-in">Back to sign in</Link>
         </p>
       </section>
 

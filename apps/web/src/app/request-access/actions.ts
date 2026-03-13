@@ -52,7 +52,7 @@ export async function submitIndividualAccessRequest(formData: FormData) {
   });
 
   cookies().delete(DRAFT_COOKIE);
-  redirect('/dashboard');
+  redirect('/access-status');
 }
 
 export async function submitBusinessAccessRequest(formData: FormData) {

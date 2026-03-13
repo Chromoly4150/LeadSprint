@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { cookies } from 'next/headers';
 import { SignUp } from '@clerk/nextjs';
 import { authScaffoldEnabled, getOnboardingRedirectUrl } from '../../../lib/auth/config';
 
@@ -15,8 +16,9 @@ function getSafeRedirectUrl(value?: string) {
 }
 
 export default function SignUpPage({ searchParams }: { searchParams?: { invite?: string; approved?: string; redirect_url?: string } }) {
-  const allowed = Boolean(searchParams?.invite || searchParams?.approved);
-  const redirectUrl = getSafeRedirectUrl(searchParams?.redirect_url);
+  const hasDraft = Boolean(cookies().get('leadsprint_request_access_draft')?.value);
+  const allowed = Boolean(searchParams?.invite || searchParams?.approved || hasDraft);
+  const redirectUrl = getSafeRedirectUrl(searchParams?.redirect_url || (hasDraft ? '/request-access?resume=1' : undefined));
 
   if (!authScaffoldEnabled) {
     return (

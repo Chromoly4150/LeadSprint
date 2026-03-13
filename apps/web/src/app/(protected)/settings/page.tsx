@@ -2,7 +2,7 @@ import { AppShell, cardStyle, inputStyle } from '../../../components/app-shell';
 import { WorkspaceBadge } from '../../../components/workspace-badge';
 import { internalApiFetch } from '../../../lib/api/internal-api';
 import {
-  approveBusinessRequestAction,
+  approveAccessRequestAction,
   bootstrapGmailProviderAction,
   createInvitationAction,
   followUpBusinessRequestAction,
@@ -25,6 +25,7 @@ type AccessRequestRow = {
   team_size?: string | null;
   authority_attestation: boolean;
   notes?: string | null;
+  request_kind: string;
   status: string;
   review_notes?: string | null;
   created_at: string;
@@ -120,7 +121,7 @@ export default async function SettingsPage() {
                       <div>
                         <div style={{ fontWeight: 700 }}>{request.organization_name}</div>
                         <div style={{ color: '#6b7280', fontSize: 13 }}>{request.full_name} · {request.email}</div>
-                        <div style={{ color: '#6b7280', fontSize: 12 }}>{request.status} · {request.role_title || 'role not specified'} · {request.line_of_business || 'line of business not provided'}</div>
+                        <div style={{ color: '#6b7280', fontSize: 12 }}>{request.request_kind === 'individual_workspace' ? 'individual request' : 'business request'} · {request.status} · {request.role_title || 'role not specified'} · {request.line_of_business || 'line of business not provided'}</div>
                       </div>
                       <div style={{ fontSize: 13, color: '#374151' }}>
                         <div>Website: {request.website || '—'}</div>
@@ -131,7 +132,7 @@ export default async function SettingsPage() {
                       </div>
                       {request.status !== 'approved' && request.status !== 'rejected' ? (
                         <div style={{ display: 'grid', gap: 8 }}>
-                          <form action={approveBusinessRequestAction} style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                          <form action={approveAccessRequestAction} style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                             <input type="hidden" name="requestId" value={request.id} />
                             <input name="reviewNotes" placeholder="Approval notes (optional)" style={{ ...inputStyle, minWidth: 260 }} />
                             <button type="submit">Approve business</button>

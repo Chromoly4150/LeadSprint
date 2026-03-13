@@ -4,11 +4,11 @@ import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { internalApiFetch } from '../../../lib/api/internal-api';
 
-export async function approveBusinessRequestAction(formData: FormData) {
+export async function approveAccessRequestAction(formData: FormData) {
   const requestId = String(formData.get('requestId') || '');
   const reviewNotes = String(formData.get('reviewNotes') || '').trim();
   if (!requestId) return;
-  await internalApiFetch(`/api/admin/access-requests/${requestId}/approve-business`, {
+  await internalApiFetch(`/api/admin/access-requests/${requestId}/approve`, {
     method: 'POST',
     body: JSON.stringify({ reviewNotes }),
   });

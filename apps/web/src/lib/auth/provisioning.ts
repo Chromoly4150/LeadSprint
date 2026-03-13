@@ -5,9 +5,9 @@ import { getCurrentAuthUser } from './current-user';
 export type ProvisioningState =
   | { state: 'signed_out' }
   | { state: 'authenticated_not_onboarded' }
-  | { state: 'pending'; request: any; invitations?: any[] }
-  | { state: 'needs_follow_up'; request: any; invitations?: any[] }
-  | { state: 'rejected'; request: any; invitations?: any[] }
+  | { state: 'pending'; request: { requestKind?: string; organizationName?: string; createdAt?: string; updatedAt?: string; [key: string]: any }; invitations?: any[] }
+  | { state: 'needs_follow_up'; request: { requestKind?: string; organizationName?: string; createdAt?: string; updatedAt?: string; [key: string]: any }; invitations?: any[] }
+  | { state: 'rejected'; request: { requestKind?: string; organizationName?: string; createdAt?: string; updatedAt?: string; [key: string]: any }; invitations?: any[] }
   | { state: 'invited'; invitations: any[] }
   | { state: 'approved'; workspace: any; user: any };
 
