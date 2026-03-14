@@ -22,6 +22,7 @@ export default async function OnboardingPage() {
     <AppShell
       title="Onboarding"
       subtitle="This is now the authenticated continuation of the request-access flow, not the primary public entry point."
+      showNav={false}
     >
       <section style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 16 }}>
         <article style={cardStyle}>

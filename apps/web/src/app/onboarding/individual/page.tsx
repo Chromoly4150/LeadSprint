@@ -6,7 +6,7 @@ export default async function IndividualOnboardingPage() {
   const currentUser = await getCurrentAuthUser();
 
   return (
-    <AppShell title="Create individual workspace" subtitle="For solo use only. Individual workspaces cannot invite teammates.">
+    <AppShell title="Create individual workspace" subtitle="For solo use only. Individual workspaces cannot invite teammates." showNav={false}>
       <form action={createIndividualWorkspace} style={{ ...cardStyle, display: 'grid', gap: 12, maxWidth: 720 }}>
         <label>
           Full name

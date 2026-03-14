@@ -15,7 +15,7 @@ export default async function BusinessOnboardingPage() {
   const currentUser = await getCurrentAuthUser();
 
   return (
-    <AppShell title="Request verified business workspace" subtitle="For companies and teams. You’ll need to confirm the business exists and that you’re authorized to set this workspace up.">
+    <AppShell title="Request verified business workspace" subtitle="For companies and teams. You’ll need to confirm the business exists and that you’re authorized to set this workspace up." showNav={false}>
       <form action={submitBusinessRequest} style={{ ...cardStyle, display: 'grid', gap: 12, maxWidth: 760 }}>
         <label>
           Full name

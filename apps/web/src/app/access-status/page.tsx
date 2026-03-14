@@ -13,7 +13,7 @@ export default async function AccessStatusPage() {
 
   if (state.state === 'invited') {
     return (
-      <AppShell title="You’ve been invited" subtitle="A verified business workspace invited you to join.">
+      <AppShell title="You’ve been invited" subtitle="A verified business workspace invited you to join." showNav={false}>
         <section style={cardStyle}>
           <h2 style={{ marginTop: 0 }}>Pending invitations</h2>
           <div style={{ display: 'grid', gap: 12 }}>
@@ -53,7 +53,7 @@ export default async function AccessStatusPage() {
   const request = state.request;
 
   return (
-    <AppShell title={titleMap[state.state]} subtitle={subtitleMap[state.state]}>
+    <AppShell title={titleMap[state.state]} subtitle={subtitleMap[state.state]} showNav={false}>
       <section style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>What happens next</h2>
         <ul>
