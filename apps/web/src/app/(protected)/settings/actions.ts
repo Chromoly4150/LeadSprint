@@ -93,6 +93,57 @@ export async function createInternalUserAction(formData: FormData) {
   }
 }
 
+export async function updateUserAction(formData: FormData) {
+  const userId = String(formData.get('userId') || '').trim();
+  const fullName = String(formData.get('fullName') || '').trim();
+  const role = String(formData.get('role') || '').trim();
+  const status = String(formData.get('status') || '').trim();
+  if (!userId || !fullName || !role || !status) return;
+  try {
+    await internalApiFetch(`/api/users/${userId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ fullName, role, status }),
+    });
+    revalidatePath('/settings');
+    settingsRedirect('User updated.');
+  } catch (error) {
+    settingsRedirect(undefined, error instanceof Error ? error.message : 'Could not update user.');
+  }
+}
+
+export async function removeUserAction(formData: FormData) {
+  const userId = String(formData.get('userId') || '').trim();
+  if (!userId) return;
+  try {
+    await internalApiFetch(`/api/users/${userId}`, { method: 'DELETE' });
+    revalidatePath('/settings');
+    settingsRedirect('User removed.');
+  } catch (error) {
+    settingsRedirect(undefined, error instanceof Error ? error.message : 'Could not remove user.');
+  }
+}
+
+export async function updatePermissionOverridesAction(formData: FormData) {
+  const userId = String(formData.get('userId') || '').trim();
+  if (!userId) return;
+  const permissions = {
+    'settings.manageBusiness': formData.get('settings.manageBusiness') === 'on',
+    'settings.manageTemplates': formData.get('settings.manageTemplates') === 'on',
+    'platform.accessRequests.review': formData.get('platform.accessRequests.review') === 'on',
+    'platform.users.manage': formData.get('platform.users.manage') === 'on',
+  };
+  try {
+    await internalApiFetch(`/api/users/${userId}/permissions`, {
+      method: 'PUT',
+      body: JSON.stringify({ permissions }),
+    });
+    revalidatePath('/settings');
+    settingsRedirect('Permission overrides saved.');
+  } catch (error) {
+    settingsRedirect(undefined, error instanceof Error ? error.message : 'Could not save permission overrides.');
+  }
+}
+
 export async function revokeInvitationAction(formData: FormData) {
   const invitationId = String(formData.get('invitationId') || '').trim();
   if (!invitationId) return;

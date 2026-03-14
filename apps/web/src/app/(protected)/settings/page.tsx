@@ -6,13 +6,16 @@ import {
   bootstrapGmailProviderAction,
   createInternalUserAction,
   createInvitationAction,
+  removeUserAction,
+  updatePermissionOverridesAction,
+  updateUserAction,
   followUpBusinessRequestAction,
   rejectBusinessRequestAction,
   revokeInvitationAction,
   startGmailOAuthAction,
 } from './actions';
 
-type UserRow = { id: string; fullName: string; email: string; role: string; roleLabel?: string; status?: string };
+type UserRow = { id: string; fullName: string; email: string; role: string; roleLabel?: string; status?: string; permissionOverrides?: Record<string, boolean>; permissions?: Record<string, boolean> };
 type ProviderRow = { key: string; label: string; needsAuth: boolean; status: string; updatedAt: string | null };
 type AccessRequestRow = {
   id: string;
@@ -65,6 +68,20 @@ export default async function SettingsPage({ searchParams }: { searchParams?: { 
 
   const platformUsers = usersRes.users.filter((user) => user.role.startsWith('platform_'));
   const companyUsers = usersRes.users.filter((user) => !user.role.startsWith('platform_'));
+
+  const editableRoleOptions = (currentScope: 'platform' | 'company') => {
+    return currentScope === 'platform'
+      ? [
+          { value: 'platform_agent', label: 'Platform Agent' },
+          { value: 'platform_sme', label: 'Platform SME' },
+          { value: 'platform_admin', label: 'Platform Admin' },
+        ]
+      : [
+          { value: 'company_agent', label: 'Agent' },
+          { value: 'company_admin', label: 'Admin' },
+          { value: 'company_owner', label: 'Company Owner' },
+        ];
+  };
   const filteredRequests = requestsRes.requests.filter((request) => {
     if (!requestQuery) return true;
     const haystack = [request.organization_name, request.full_name, request.email, request.line_of_business || '', request.status].join(' ').toLowerCase();
@@ -100,13 +117,53 @@ export default async function SettingsPage({ searchParams }: { searchParams?: { 
             </div>
           </div>
           <div style={{ display: 'grid', gap: 10, marginTop: 12 }}>
-            {(roleScope === 'platform' ? platformUsers : companyUsers).map((user) => (
-              <div key={user.id} style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 12 }}>
-                <div style={{ fontWeight: 700 }}>{user.fullName}</div>
-                <div style={{ color: '#6b7280', fontSize: 13 }}>{user.email}</div>
-                <div style={{ color: '#6b7280', fontSize: 12 }}>{user.roleLabel || user.role} · {user.status || 'active'}</div>
+            {(roleScope === 'platform' ? platformUsers : companyUsers).map((user) => {
+              const scope = user.role.startsWith('platform_') ? 'platform' : 'company';
+              const canEdit = meRes.actor.role === 'platform_owner' || meRes.actor.role === 'platform_admin' || (!user.role.startsWith('platform_') && (meRes.actor.role === 'company_owner' || meRes.actor.role === 'company_admin'));
+              return (
+              <div key={user.id} style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 12, display: 'grid', gap: 10 }}>
+                <div>
+                  <div style={{ fontWeight: 700 }}>{user.fullName}</div>
+                  <div style={{ color: '#6b7280', fontSize: 13 }}>{user.email}</div>
+                  <div style={{ color: '#6b7280', fontSize: 12 }}>{user.roleLabel || user.role} · {user.status || 'active'}</div>
+                </div>
+                {canEdit ? (
+                  <div style={{ display: 'grid', gap: 10 }}>
+                    <form action={updateUserAction} style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      <input type="hidden" name="userId" value={user.id} />
+                      <input name="fullName" defaultValue={user.fullName} style={{ ...inputStyle, minWidth: 180 }} />
+                      <select name="role" defaultValue={user.role} style={inputStyle}>
+                        {editableRoleOptions(scope).map((option) => (
+                          <option key={option.value} value={option.value}>{option.label}</option>
+                        ))}
+                      </select>
+                      <select name="status" defaultValue={user.status || 'active'} style={inputStyle}>
+                        <option value="active">Active</option>
+                        <option value="deactivated">Deactivated</option>
+                        <option value="suspended">Suspended</option>
+                      </select>
+                      <button type="submit">Save</button>
+                    </form>
+                    {scope === 'platform' || user.role === 'company_admin' || user.role === 'company_agent' ? (
+                      <form action={updatePermissionOverridesAction} style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+                        <input type="hidden" name="userId" value={user.id} />
+                        <label><input type="checkbox" name="platform.accessRequests.review" defaultChecked={Boolean(user.permissionOverrides?.['platform.accessRequests.review'])} /> access review</label>
+                        <label><input type="checkbox" name="platform.users.manage" defaultChecked={Boolean(user.permissionOverrides?.['platform.users.manage'])} /> manage users</label>
+                        <label><input type="checkbox" name="settings.manageBusiness" defaultChecked={Boolean(user.permissionOverrides?.['settings.manageBusiness'])} /> business settings</label>
+                        <label><input type="checkbox" name="settings.manageTemplates" defaultChecked={Boolean(user.permissionOverrides?.['settings.manageTemplates'])} /> templates</label>
+                        <button type="submit">Save permissions</button>
+                      </form>
+                    ) : null}
+                    {user.role !== 'platform_owner' && user.role !== 'company_owner' ? (
+                      <form action={removeUserAction}>
+                        <input type="hidden" name="userId" value={user.id} />
+                        <button type="submit">Remove user</button>
+                      </form>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
-            ))}
+            )})}
             {(roleScope === 'platform' ? platformUsers : companyUsers).length === 0 ? <p style={{ margin: 0, color: '#6b7280' }}>No users in this scope yet.</p> : null}
           </div>
           {meRes.actor.role === 'platform_owner' || meRes.actor.role === 'platform_admin' ? (

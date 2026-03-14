@@ -690,6 +690,14 @@ function getActorOrgId(req) {
   return req.actor?.organization_id || DEFAULT_ORG_ID;
 }
 
+function getManageableUserById(req, userId) {
+  if (PLATFORM_ROLES.has(req.actor?.role)) {
+    return db.prepare(`SELECT * FROM users WHERE id = ? LIMIT 1`).get(userId);
+  }
+  const orgId = getActorOrgId(req);
+  return db.prepare(`SELECT * FROM users WHERE organization_id = ? AND id = ? LIMIT 1`).get(orgId, userId);
+}
+
 app.get('/health', (_req, res) => res.json({ ok: true }));
 
 app.get('/api/access/me', requireIdentity, (req, res) => {
@@ -1061,10 +1069,9 @@ app.post('/api/invitations/:id/accept', requireIdentity, (req, res) => {
 });
 
 app.get('/api/users', requirePermission('team.manageUsers'), (req, res) => {
-  const orgId = getActorOrgId(req);
-  const rows = db
-    .prepare(`SELECT * FROM users WHERE organization_id = ? ORDER BY role IN ('platform_owner','company_owner') DESC, created_at ASC`)
-    .all(orgId);
+  const rows = PLATFORM_ROLES.has(req.actor?.role)
+    ? db.prepare(`SELECT * FROM users ORDER BY role IN ('platform_owner','company_owner') DESC, created_at ASC`).all()
+    : db.prepare(`SELECT * FROM users WHERE organization_id = ? ORDER BY role IN ('platform_owner','company_owner') DESC, created_at ASC`).all(getActorOrgId(req));
 
   res.json({ ok: true, users: rows.map(serializeUser) });
 });
@@ -1087,10 +1094,7 @@ app.get('/api/users/:id/permissions', requirePermission('team.manageUsers'), (re
 });
 
 app.put('/api/users/:id/permissions', requirePermission('team.manageUsers'), (req, res) => {
-  const orgId = getActorOrgId(req);
-  const user = db
-    .prepare(`SELECT * FROM users WHERE organization_id = ? AND id = ? LIMIT 1`)
-    .get(orgId, req.params.id);
+  const user = getManageableUserById(req, req.params.id);
 
   if (!user) return res.status(404).json({ ok: false, error: 'User not found' });
   if (!canManageRole(req.actor.role, user.role)) {
@@ -1166,10 +1170,7 @@ app.post('/api/users', requirePermission('team.manageUsers'), (req, res) => {
 });
 
 app.patch('/api/users/:id', requirePermission('team.manageUsers'), (req, res) => {
-  const orgId = getActorOrgId(req);
-  const existing = db
-    .prepare(`SELECT * FROM users WHERE organization_id = ? AND id = ? LIMIT 1`)
-    .get(orgId, req.params.id);
+  const existing = getManageableUserById(req, req.params.id);
   if (!existing) return res.status(404).json({ ok: false, error: 'User not found' });
 
   if (!canManageRole(req.actor.role, existing.role) && req.actor.id !== existing.id) {
@@ -1208,10 +1209,7 @@ app.patch('/api/users/:id', requirePermission('team.manageUsers'), (req, res) =>
 });
 
 app.delete('/api/users/:id', requirePermission('team.manageUsers'), (req, res) => {
-  const orgId = getActorOrgId(req);
-  const existing = db
-    .prepare(`SELECT * FROM users WHERE organization_id = ? AND id = ? LIMIT 1`)
-    .get(orgId, req.params.id);
+  const existing = getManageableUserById(req, req.params.id);
   if (!existing) return res.status(404).json({ ok: false, error: 'User not found' });
 
   if (existing.role === 'company_owner' || existing.role === 'platform_owner') {
