@@ -4,12 +4,13 @@ import {
   addCommunicationAction,
   addLeadNoteAction,
   createDraftAction,
+  generateAiDraftAction,
   queueOutboxAction,
   updateLeadStatusAction,
   updateLeadUrgencyAction,
 } from './actions';
 
-type SearchParams = { selected?: string };
+type SearchParams = { selected?: string; message?: string; error?: string };
 
 export default async function LeadsPage({ searchParams }: { searchParams?: Promise<SearchParams> }) {
   const params = (await searchParams) || {};
@@ -21,6 +22,8 @@ export default async function LeadsPage({ searchParams }: { searchParams?: Promi
   const leads = leadsRes.leads;
   const selectedId = params.selected || leads[0]?.id;
   const selectedLead = selectedId ? leads.find((lead) => lead.id === selectedId) ?? null : null;
+  const flashMessage = params.message ? decodeURIComponent(params.message) : null;
+  const flashError = params.error ? decodeURIComponent(params.error) : null;
 
   const [leadRes, notesRes, commsRes, draftsRes, outboxRes] = selectedLead
     ? await Promise.all([
@@ -41,6 +44,8 @@ export default async function LeadsPage({ searchParams }: { searchParams?: Promi
 
   return (
     <AppShell title="Leads" subtitle="Split queue + interactive detail workspace on remote main">
+      {flashMessage ? <section style={{ ...cardStyle, marginBottom: 16, border: '1px solid #bbf7d0', background: '#f0fdf4', color: '#166534' }}>{flashMessage}</section> : null}
+      {flashError ? <section style={{ ...cardStyle, marginBottom: 16, border: '1px solid #fecaca', background: '#fef2f2', color: '#991b1b' }}>{flashError}</section> : null}
       <section style={{ display: 'grid', gridTemplateColumns: '0.95fr 1.5fr', gap: 16 }}>
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0 }}>Lead queue</h2>
@@ -108,6 +113,11 @@ export default async function LeadsPage({ searchParams }: { searchParams?: Promi
                   <div>
                     <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>Message</div>
                     <div style={{ fontSize: 14 }}>{lead.message || 'No intake message provided.'}</div>
+                    <form action={generateAiDraftAction} style={{ marginTop: 10 }}>
+                      <input type="hidden" name="leadId" value={lead.id} />
+                      <input type="hidden" name="toEmail" value={lead.email || ''} />
+                      <button type="submit" style={{ ...inputStyle, background: '#dcfce7', cursor: 'pointer' }}>Generate AI draft</button>
+                    </form>
                   </div>
                 </div>
               </section>
@@ -181,6 +191,7 @@ export default async function LeadsPage({ searchParams }: { searchParams?: Promi
                         <div style={{ fontWeight: 600 }}>{draft.subject}</div>
                         <div style={{ color: '#6b7280', fontSize: 12 }}>{draft.toEmail} · {draft.status}</div>
                         <div style={{ color: '#6b7280', fontSize: 12 }}>By {draft.createdByName} · {new Date(draft.createdAt).toLocaleString()}</div>
+                        <div style={{ marginTop: 8, whiteSpace: 'pre-wrap', fontSize: 13, color: '#374151' }}>{draft.body}</div>
                       </div>
                     )) : <div style={{ color: '#6b7280' }}>No drafts yet.</div>}
                   </div>

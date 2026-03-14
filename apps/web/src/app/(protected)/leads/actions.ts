@@ -8,6 +8,13 @@ async function apiMutation(path: string, init: RequestInit) {
   return internalApiFetch(path, init);
 }
 
+function leadsRedirect(leadId: string, message?: string, error?: string) {
+  const params = new URLSearchParams({ selected: leadId });
+  if (message) params.set('message', message);
+  if (error) params.set('error', error);
+  redirect(`/leads?${params.toString()}`);
+}
+
 export async function updateLeadStatusAction(formData: FormData) {
   const leadId = String(formData.get('leadId') || '');
   const status = String(formData.get('status') || '');
@@ -67,4 +74,27 @@ export async function queueOutboxAction(formData: FormData) {
   await apiMutation(`/api/leads/${leadId}/email-outbox`, { method: 'POST', body: JSON.stringify({ emailDraftId: emailDraftId || undefined, providerKey }) });
   revalidatePath('/leads');
   redirect(`/leads?selected=${leadId}`);
+}
+
+export async function generateAiDraftAction(formData: FormData) {
+  const leadId = String(formData.get('leadId') || '').trim();
+  const toEmail = String(formData.get('toEmail') || '').trim();
+  if (!leadId) return;
+  try {
+    const res = await apiMutation(`/api/leads/${leadId}/ai/draft-response`, { method: 'POST', body: JSON.stringify({}) }) as { draft?: { subject?: string; draft?: string } };
+    if (!res?.draft?.subject || !res?.draft?.draft) {
+      throw new Error('AI draft was empty');
+    }
+    if (!toEmail) {
+      throw new Error('Lead has no email address for draft creation');
+    }
+    await apiMutation(`/api/leads/${leadId}/email-drafts`, {
+      method: 'POST',
+      body: JSON.stringify({ toEmail, subject: res.draft.subject, body: res.draft.draft, source: 'ai' }),
+    });
+    revalidatePath('/leads');
+    leadsRedirect(leadId, `AI draft created: ${res.draft.subject}`);
+  } catch (error) {
+    leadsRedirect(leadId, undefined, error instanceof Error ? error.message : 'Could not generate AI draft.');
+  }
 }
