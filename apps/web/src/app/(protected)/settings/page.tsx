@@ -40,6 +40,23 @@ type AccessRequestRow = {
 };
 type InvitationRow = { id: string; email: string; role: string; status: string; created_at: string };
 
+function statusBadge(status?: string) {
+  const normalized = status || 'active';
+  const styles: Record<string, React.CSSProperties> = {
+    active: { background: '#dcfce7', color: '#166534' },
+    deactivated: { background: '#e5e7eb', color: '#374151' },
+    suspended: { background: '#fee2e2', color: '#991b1b' },
+    pending: { background: '#fef3c7', color: '#92400e' },
+  };
+  return <span style={{ display: 'inline-flex', padding: '2px 8px', borderRadius: 999, fontSize: 12, fontWeight: 600, ...(styles[normalized] || styles.active) }}>{normalized.replaceAll('_', ' ')}</span>;
+}
+
+function permissionSummary(user: UserRow) {
+  const active = Object.entries(user.permissionOverrides || {}).filter(([, enabled]) => enabled).map(([key]) => key);
+  if (active.length === 0) return 'No overrides';
+  return active.join(', ');
+}
+
 export default async function SettingsPage({ searchParams }: { searchParams?: { message?: string; error?: string; q?: string; roleScope?: string } }) {
   const [usersRes, providersRes, meRes, requestsRes] = await Promise.all([
     internalApiFetch<{ users: UserRow[] }>('/api/users'),
@@ -154,7 +171,11 @@ export default async function SettingsPage({ searchParams }: { searchParams?: { 
                 <div>
                   <div style={{ fontWeight: 700 }}>{user.fullName}</div>
                   <div style={{ color: '#6b7280', fontSize: 13 }}>{user.email}</div>
-                  <div style={{ color: '#6b7280', fontSize: 12 }}>{user.roleLabel || user.role} · {user.status || 'active'}</div>
+                  <div style={{ color: '#6b7280', fontSize: 12, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <span>{user.roleLabel || user.role}</span>
+                    {statusBadge(user.status || 'active')}
+                  </div>
+                  <div style={{ color: '#6b7280', fontSize: 12 }}>Overrides: {permissionSummary(user)}</div>
                 </div>
                 {canEdit ? (
                   <div style={{ display: 'grid', gap: 10 }}>
@@ -175,7 +196,16 @@ export default async function SettingsPage({ searchParams }: { searchParams?: { 
                     </form>
                     <form action={updatePermissionOverridesAction} style={{ display: 'grid', gap: 8 }}>
                       <input type="hidden" name="userId" value={user.id} />
-                      <div style={{ fontSize: 12, color: '#6b7280' }}>Permission overrides (leave unchecked to keep the default role behavior)</div>
+                      <div style={{ fontSize: 12, color: '#6b7280' }}>Permission overrides (choose a preset or set individual toggles)</div>
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                        <select name="preset" defaultValue="" style={inputStyle}>
+                          <option value="">Custom overrides</option>
+                          <option value="none">No overrides</option>
+                          <option value="company_manager">Company manager</option>
+                          {scope === 'platform' ? <option value="platform_reviewer">Platform reviewer</option> : null}
+                          {scope === 'platform' ? <option value="platform_manager">Platform manager</option> : null}
+                        </select>
+                      </div>
                       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
                         {permissionFieldsForUser(user).map(([key, label]) => (
                           <label key={key}><input type="checkbox" name={key} defaultChecked={Boolean(user.permissionOverrides?.[key])} /> {label}</label>
@@ -317,6 +347,7 @@ export default async function SettingsPage({ searchParams }: { searchParams?: { 
 
       <section style={{ ...cardStyle, marginTop: 16 }}>
         <h2 style={{ marginTop: 0 }}>Company invitations</h2>
+        <p style={{ marginTop: 0, color: '#6b7280' }}>Invite customer-facing users into a verified business workspace as Admin or Agent.</p>
         {orgIdForInvites ? (
           <>
             <form action={createInvitationAction} style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
@@ -335,7 +366,7 @@ export default async function SettingsPage({ searchParams }: { searchParams?: { 
                 invitationsRes!.invitations.map((invitation) => (
                   <div key={invitation.id} style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 12, display: 'grid', gap: 8 }}>
                     <div style={{ fontWeight: 700 }}>{invitation.email}</div>
-                    <div style={{ color: '#6b7280', fontSize: 12 }}>{invitation.role} · {invitation.status} · {invitation.created_at}</div>
+                    <div style={{ color: '#6b7280', fontSize: 12, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}><span>{invitation.role}</span>{statusBadge(invitation.status)}<span>{invitation.created_at}</span></div>
                     {invitation.status === 'pending' ? (
                       <form action={revokeInvitationAction}>
                         <input type="hidden" name="invitationId" value={invitation.id} />

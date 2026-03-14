@@ -126,12 +126,41 @@ export async function removeUserAction(formData: FormData) {
 export async function updatePermissionOverridesAction(formData: FormData) {
   const userId = String(formData.get('userId') || '').trim();
   if (!userId) return;
-  const permissions = {
-    'settings.manageBusiness': formData.get('settings.manageBusiness') === 'on',
-    'settings.manageTemplates': formData.get('settings.manageTemplates') === 'on',
-    'platform.accessRequests.review': formData.get('platform.accessRequests.review') === 'on',
-    'platform.users.manage': formData.get('platform.users.manage') === 'on',
+  const preset = String(formData.get('preset') || '').trim();
+  const presetPermissions: Record<string, Record<string, boolean>> = {
+    none: {
+      'settings.manageBusiness': false,
+      'settings.manageTemplates': false,
+      'platform.accessRequests.review': false,
+      'platform.users.manage': false,
+    },
+    company_manager: {
+      'settings.manageBusiness': true,
+      'settings.manageTemplates': true,
+      'platform.accessRequests.review': false,
+      'platform.users.manage': false,
+    },
+    platform_reviewer: {
+      'settings.manageBusiness': true,
+      'settings.manageTemplates': true,
+      'platform.accessRequests.review': true,
+      'platform.users.manage': false,
+    },
+    platform_manager: {
+      'settings.manageBusiness': true,
+      'settings.manageTemplates': true,
+      'platform.accessRequests.review': true,
+      'platform.users.manage': true,
+    },
   };
+  const permissions = preset && presetPermissions[preset]
+    ? presetPermissions[preset]
+    : {
+        'settings.manageBusiness': formData.get('settings.manageBusiness') === 'on',
+        'settings.manageTemplates': formData.get('settings.manageTemplates') === 'on',
+        'platform.accessRequests.review': formData.get('platform.accessRequests.review') === 'on',
+        'platform.users.manage': formData.get('platform.users.manage') === 'on',
+      };
   try {
     await internalApiFetch(`/api/users/${userId}/permissions`, {
       method: 'PUT',
