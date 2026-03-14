@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { AppShell, cardStyle, inputStyle } from '../../../../components/app-shell';
 import { apiFetch } from '../../../../lib/api';
-import { addCommunicationAction, addLeadNoteAction, createDraftAction, queueOutboxAction } from '../../leads/actions';
+import { addCommunicationAction, addLeadNoteAction, createDraftAction, generateAiDraftAction, queueOutboxAction } from '../../leads/actions';
 
 export default async function InboxThreadPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -86,6 +86,11 @@ export default async function InboxThreadPage({ params }: { params: Promise<{ id
 
           <section style={cardStyle}>
             <h3 style={{ marginTop: 0 }}>Draft + outbox</h3>
+            <form action={generateAiDraftAction} style={{ display: 'grid', gap: 8, marginBottom: 12 }}>
+              <input type="hidden" name="leadId" value={lead.id} />
+              <input type="hidden" name="toEmail" value={lead.email || ''} />
+              <button type="submit" style={{ ...inputStyle, background: '#dcfce7', cursor: 'pointer' }}>Generate AI draft</button>
+            </form>
             <form action={createDraftAction} style={{ display: 'grid', gap: 8, marginBottom: 12 }}>
               <input type="hidden" name="leadId" value={lead.id} />
               <input name="toEmail" defaultValue={lead.email || ''} style={inputStyle} placeholder="Recipient email" />
@@ -106,6 +111,14 @@ export default async function InboxThreadPage({ params }: { params: Promise<{ id
               <button type="submit" style={{ ...inputStyle, background: '#eef2ff', cursor: 'pointer' }}>Queue outbox item</button>
             </form>
             <div style={{ display: 'grid', gap: 8, marginTop: 12 }}>
+              {drafts.slice(0, 3).map((draft) => (
+                <div key={draft.id} style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 10 }}>
+                  <div style={{ fontWeight: 600 }}>{draft.subject}</div>
+                  <div style={{ color: '#6b7280', fontSize: 12 }}>{draft.toEmail} · {draft.status}</div>
+                  <div style={{ color: '#6b7280', fontSize: 12 }}>By {draft.createdByName} · {new Date(draft.createdAt).toLocaleString()}</div>
+                  <div style={{ marginTop: 8, whiteSpace: 'pre-wrap', fontSize: 13, color: '#374151' }}>{draft.body}</div>
+                </div>
+              ))}
               {outbox.slice(0, 4).map((item) => (
                 <div key={item.id} style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 10 }}>
                   <div style={{ fontWeight: 600 }}>{item.subject}</div>
@@ -113,6 +126,7 @@ export default async function InboxThreadPage({ params }: { params: Promise<{ id
                   {item.lastError ? <div style={{ color: '#991b1b', fontSize: 12, marginTop: 6 }}>{item.lastError}</div> : null}
                 </div>
               ))}
+              {drafts.length === 0 && outbox.length === 0 ? <div style={{ color: '#6b7280' }}>No drafts or outbox items yet.</div> : null}
             </div>
           </section>
 
