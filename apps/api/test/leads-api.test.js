@@ -199,6 +199,62 @@ test('agents cannot access owner/admin-protected routes', async (t) => {
   assert.equal(settingsRes.status, 403);
 });
 
+test('ai settings can be updated and manual lead draft runs are org-scoped', async (t) => {
+  const api = startApi();
+  t.after(api.cleanup);
+
+  await waitForHealth(api.baseUrl);
+
+  const putAiSettings = await fetch(`${api.baseUrl}/api/settings/ai`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json', 'x-user-email': 'owner@leadsprint.local' },
+    body: JSON.stringify({
+      aiEnabled: true,
+      defaultMode: 'draft_only',
+      allowedChannels: ['email'],
+      allowedActions: ['draft_message'],
+      responseSlaTargetMinutes: 5,
+      toneProfile: { defaultTone: 'helpful and concise' },
+      businessContext: { businessName: 'Default Organization', bookingLink: 'https://calendly.com/test-link' },
+    }),
+  });
+  assert.equal(putAiSettings.status, 200);
+  const putAiSettingsJson = await putAiSettings.json();
+  assert.equal(putAiSettingsJson.settings.ai_enabled, 1);
+
+  const createLead = await fetch(`${api.baseUrl}/api/leads/intake`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      fullName: 'Taylor Lead',
+      email: 'taylor.lead@example.com',
+      phone: '555-111-2222',
+      source: 'website',
+      message: 'I would like to schedule a consultation next week.',
+      urgencyStatus: 'warm',
+    }),
+  });
+  assert.equal(createLead.status, 201);
+  const createLeadJson = await createLead.json();
+
+  const draftRes = await fetch(`${api.baseUrl}/api/leads/${createLeadJson.lead.id}/ai/draft-response`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-user-email': 'owner@leadsprint.local' },
+  });
+  assert.equal(draftRes.status, 200);
+  const draftJson = await draftRes.json();
+  assert.equal(draftJson.ok, true);
+  assert.match(draftJson.draft.draft, /Taylor Lead/);
+  assert.match(draftJson.draft.draft, /https:\/\/calendly.com\/test-link/);
+
+  const runsRes = await fetch(`${api.baseUrl}/api/ai/runs`, {
+    headers: { 'x-user-email': 'owner@leadsprint.local' },
+  });
+  assert.equal(runsRes.status, 200);
+  const runsJson = await runsRes.json();
+  assert.ok(runsJson.runs.some((run) => run.lead_id === createLeadJson.lead.id && run.status === 'completed'));
+});
+
 test('platform owner can create internal platform operators', async (t) => {
   const api = startApi();
   t.after(api.cleanup);

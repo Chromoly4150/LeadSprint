@@ -5,6 +5,7 @@ const path = require('path');
 const { ensureDb, runMigrations, nowIso } = require('./db');
 const { getProvider, PROVIDERS } = require('./email');
 const { buildAuthUrl, exchangeCodeForTokens, fetchGoogleProfile } = require('./gmail-oauth');
+const { runDraftOnlyLeadResponse } = require('./ai');
 
 runMigrations();
 const db = ensureDb();
@@ -232,6 +233,23 @@ if (!existingSettings) {
   ).run(settingsId, DEFAULT_ORG_ID, BUSINESS_SETTINGS_KEY, JSON.stringify(defaultBusinessSettings), ts, ts);
 }
 
+const existingAiSettings = db.prepare('SELECT id FROM organization_ai_settings WHERE organization_id = ?').get(DEFAULT_ORG_ID);
+if (!existingAiSettings) {
+  const ts = nowIso();
+  db.prepare(`INSERT INTO organization_ai_settings (id, organization_id, ai_enabled, default_mode, allowed_channels_json, allowed_actions_json, response_sla_target_minutes, tone_profile_json, business_context_json, compliance_policy_json, usage_plan, monthly_message_limit, monthly_ai_token_budget, model_policy_json, created_at, updated_at) VALUES (?, ?, 0, 'draft_only', ?, ?, 5, ?, ?, ?, 'standard', 250, 250000, ?, ?, ?)`).run(
+    `aiset_${crypto.randomUUID()}`,
+    DEFAULT_ORG_ID,
+    JSON.stringify(['email', 'sms']),
+    JSON.stringify(['draft_message']),
+    JSON.stringify({ defaultTone: 'professional and warm' }),
+    JSON.stringify({ businessName: DEFAULT_ORG_NAME, bookingLink: defaultBusinessSettings.bookingLink }),
+    JSON.stringify({ requireHumanApprovalForOutbound: true }),
+    JSON.stringify({ primaryProvider: 'stub', allowedModels: ['stub/draft-v1'] }),
+    ts,
+    ts,
+  );
+}
+
 const defaultOwnerEmail = normalizeString(process.env.DEFAULT_OWNER_EMAIL || 'owner@leadsprint.local').toLowerCase();
 const defaultOwnerName = normalizeString(process.env.DEFAULT_OWNER_NAME || 'Organization Owner');
 const platformOwnerEmail = normalizeString(process.env.PLATFORM_OWNER_EMAIL || 'josiahricheson@gmail.com').toLowerCase();
@@ -285,6 +303,20 @@ function safeJsonParse(value, fallback) {
   } catch {
     return fallback;
   }
+}
+
+function getAiSettingsForOrg(orgId) {
+  const row = db.prepare(`SELECT * FROM organization_ai_settings WHERE organization_id = ? LIMIT 1`).get(orgId);
+  if (!row) return null;
+  return {
+    ...row,
+    allowed_channels: safeJsonParse(row.allowed_channels_json, []),
+    allowed_actions: safeJsonParse(row.allowed_actions_json, []),
+    tone_profile: safeJsonParse(row.tone_profile_json, {}),
+    business_context: safeJsonParse(row.business_context_json, {}),
+    compliance_policy: safeJsonParse(row.compliance_policy_json, {}),
+    model_policy: safeJsonParse(row.model_policy_json, {}),
+  };
 }
 
 function validateLead(payload) {
@@ -351,6 +383,7 @@ function findLeadDuplicates({ fullName, email, phone }) {
 function serializeLead(row) {
   return {
     id: row.id,
+    organizationId: row.organization_id,
     fullName: row.full_name,
     email: row.email,
     phone: row.phone,
@@ -926,6 +959,79 @@ app.get('/api/me/permissions', requireAuthenticated, (req, res) => {
   });
 });
 
+app.get('/api/settings/ai', requirePermission('settings.manageBusiness'), (req, res) => {
+  const orgId = getActorOrgId(req);
+  const settings = getAiSettingsForOrg(orgId);
+  if (!settings) return res.status(404).json({ ok: false, error: 'AI settings not found' });
+  res.json({ ok: true, settings, updatedAt: settings.updated_at || null });
+});
+
+app.put('/api/settings/ai', requirePermission('settings.manageBusiness'), (req, res) => {
+  const orgId = getActorOrgId(req);
+  const current = getAiSettingsForOrg(orgId);
+  const incoming = req.body || {};
+  const next = {
+    ai_enabled: Boolean(incoming.aiEnabled),
+    default_mode: ['draft_only', 'approval_required', 'guarded_autopilot'].includes(incoming.defaultMode) ? incoming.defaultMode : (current?.default_mode || 'draft_only'),
+    allowed_channels_json: JSON.stringify(Array.isArray(incoming.allowedChannels) ? incoming.allowedChannels : (current?.allowed_channels || ['email', 'sms'])),
+    allowed_actions_json: JSON.stringify(Array.isArray(incoming.allowedActions) ? incoming.allowedActions : (current?.allowed_actions || ['draft_message'])),
+    response_sla_target_minutes: Math.max(1, Number(incoming.responseSlaTargetMinutes || current?.response_sla_target_minutes || 5)),
+    tone_profile_json: JSON.stringify(incoming.toneProfile && typeof incoming.toneProfile === 'object' ? incoming.toneProfile : (current?.tone_profile || { defaultTone: 'professional and warm' })),
+    business_context_json: JSON.stringify(incoming.businessContext && typeof incoming.businessContext === 'object' ? incoming.businessContext : (current?.business_context || {})),
+    compliance_policy_json: JSON.stringify(incoming.compliancePolicy && typeof incoming.compliancePolicy === 'object' ? incoming.compliancePolicy : (current?.compliance_policy || {})),
+    usage_plan: normalizeString(incoming.usagePlan) || current?.usage_plan || 'standard',
+    monthly_message_limit: Math.max(1, Number(incoming.monthlyMessageLimit || current?.monthly_message_limit || 250)),
+    monthly_ai_token_budget: Math.max(1000, Number(incoming.monthlyAiTokenBudget || current?.monthly_ai_token_budget || 250000)),
+    model_policy_json: JSON.stringify(incoming.modelPolicy && typeof incoming.modelPolicy === 'object' ? incoming.modelPolicy : (current?.model_policy || { primaryProvider: 'stub', allowedModels: ['stub/draft-v1'] })),
+  };
+  const ts = nowIso();
+  if (current) {
+    db.prepare(`UPDATE organization_ai_settings SET ai_enabled = ?, default_mode = ?, allowed_channels_json = ?, allowed_actions_json = ?, response_sla_target_minutes = ?, tone_profile_json = ?, business_context_json = ?, compliance_policy_json = ?, usage_plan = ?, monthly_message_limit = ?, monthly_ai_token_budget = ?, model_policy_json = ?, updated_at = ? WHERE organization_id = ?`).run(
+      next.ai_enabled ? 1 : 0,
+      next.default_mode,
+      next.allowed_channels_json,
+      next.allowed_actions_json,
+      next.response_sla_target_minutes,
+      next.tone_profile_json,
+      next.business_context_json,
+      next.compliance_policy_json,
+      next.usage_plan,
+      next.monthly_message_limit,
+      next.monthly_ai_token_budget,
+      next.model_policy_json,
+      ts,
+      orgId,
+    );
+  } else {
+    db.prepare(`INSERT INTO organization_ai_settings (id, organization_id, ai_enabled, default_mode, allowed_channels_json, allowed_actions_json, response_sla_target_minutes, tone_profile_json, business_context_json, compliance_policy_json, usage_plan, monthly_message_limit, monthly_ai_token_budget, model_policy_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      `aiset_${crypto.randomUUID()}`,
+      orgId,
+      next.ai_enabled ? 1 : 0,
+      next.default_mode,
+      next.allowed_channels_json,
+      next.allowed_actions_json,
+      next.response_sla_target_minutes,
+      next.tone_profile_json,
+      next.business_context_json,
+      next.compliance_policy_json,
+      next.usage_plan,
+      next.monthly_message_limit,
+      next.monthly_ai_token_budget,
+      next.model_policy_json,
+      ts,
+      ts,
+    );
+  }
+  res.json({ ok: true, updatedAt: ts, settings: getAiSettingsForOrg(orgId) });
+});
+
+app.get('/api/ai/runs', requirePermission('communications.view'), (req, res) => {
+  const orgId = getActorOrgId(req);
+  const limit = Math.min(Number(req.query.limit || 25), 100);
+  const rows = db.prepare(`SELECT * FROM ai_runs WHERE organization_id = ? ORDER BY created_at DESC LIMIT ?`).all(orgId, limit);
+  res.json({ ok: true, runs: rows });
+});
+
 app.get('/api/admin/access-requests', requirePermission('platform.accessRequests.review'), (req, res) => {
   const rows = db.prepare(`SELECT id, clerk_user_id, email, full_name, request_kind, role_title, organization_name, website, line_of_business, requested_features_json, team_size, authority_attestation, notes, status, review_notes, reviewed_at, activation_token, activated_at, created_at, updated_at FROM access_requests ORDER BY created_at DESC`).all();
   res.json({
@@ -1385,6 +1491,34 @@ app.get('/api/leads/:id/events', requirePermission('leads.view'), (req, res) => 
     .map((r) => ({ id: r.id, eventType: r.event_type, payload: r.payload_json ? JSON.parse(r.payload_json) : null, createdAt: r.created_at }));
 
   res.json({ ok: true, events: rows });
+});
+
+app.post('/api/leads/:id/ai/draft-response', requirePermission('communications.create'), async (req, res) => {
+  const orgId = getActorOrgId(req);
+  const lead = db.prepare(`SELECT * FROM leads WHERE organization_id = ? AND id = ? LIMIT 1`).get(orgId, req.params.id);
+  if (!lead) return res.status(404).json({ ok: false, error: 'Lead not found' });
+
+  const org = db.prepare(`SELECT * FROM organizations WHERE id = ? LIMIT 1`).get(orgId);
+  const settings = getAiSettingsForOrg(orgId);
+  if (!settings) return res.status(404).json({ ok: false, error: 'AI settings not found' });
+  if (!settings.ai_enabled) return res.status(409).json({ ok: false, error: 'AI is disabled for this organization' });
+  if (!settings.allowed_actions.includes('draft_message')) return res.status(403).json({ ok: false, error: 'Draft generation is not allowed for this organization' });
+
+  const runId = `air_${crypto.randomUUID()}`;
+  const outputId = `airo_${crypto.randomUUID()}`;
+  const ts = nowIso();
+  db.prepare(`INSERT INTO ai_runs (id, organization_id, workflow_type, trigger_type, trigger_id, lead_id, status, mode, started_at, created_at, updated_at) VALUES (?, ?, 'lead_reply_draft', 'manual', ?, ?, 'pending', ?, ?, ?, ?)`)
+    .run(runId, orgId, req.params.id, lead.id, settings.default_mode, ts, ts, ts);
+
+  try {
+    const result = await runDraftOnlyLeadResponse({ org, lead, settings });
+    db.prepare(`UPDATE ai_runs SET status = 'completed', provider = ?, model = ?, input_tokens = ?, output_tokens = ?, estimated_cost = ?, completed_at = ?, updated_at = ? WHERE id = ?`).run(result.provider, result.model, result.inputTokens, result.outputTokens, result.estimatedCost, nowIso(), nowIso(), runId);
+    db.prepare(`INSERT INTO ai_run_outputs (id, ai_run_id, output_type, content_json, created_at) VALUES (?, ?, 'draft_message', ?, ?)`).run(outputId, runId, JSON.stringify(result.output), nowIso());
+    res.json({ ok: true, run: { id: runId, status: 'completed', provider: result.provider, model: result.model }, draft: result.output });
+  } catch (error) {
+    db.prepare(`UPDATE ai_runs SET status = 'failed', error_code = ?, error_message = ?, completed_at = ?, updated_at = ? WHERE id = ?`).run('draft_failed', error?.message || 'AI draft failed', nowIso(), nowIso(), runId);
+    res.status(500).json({ ok: false, error: error?.message || 'AI draft failed' });
+  }
 });
 
 app.get('/api/leads/:id/communications', requirePermission('communications.view'), (req, res) => {
