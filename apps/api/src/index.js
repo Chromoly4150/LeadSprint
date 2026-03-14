@@ -506,12 +506,11 @@ function getActor(req) {
     if (byClerk) return byClerk;
   }
 
-  const email = identity.email || defaultOwnerEmail;
-  if (!email) return null;
+  if (!identity.email) return null;
 
   return ensureBootstrapActor(identity) || db
     .prepare(`SELECT * FROM users WHERE organization_id = ? AND email = ? LIMIT 1`)
-    .get(DEFAULT_ORG_ID, email);
+    .get(DEFAULT_ORG_ID, identity.email);
 }
 
 function getPermissionOverrides(user) {
@@ -581,8 +580,7 @@ function loadGmailClientConfig() {
 
 function requireAuthenticated(req, res, next) {
   const identity = getRequestIdentity(req);
-  const allowUnsignedDev = process.env.NODE_ENV !== 'production' && !INTERNAL_API_AUTH_SECRET;
-  if (!identity.verified && !allowUnsignedDev) {
+  if (!identity.verified) {
     return res.status(401).json({ ok: false, error: 'Verified internal identity is required' });
   }
 
@@ -601,8 +599,7 @@ function requireIdentity(req, res, next) {
     return res.status(401).json({ ok: false, error: 'Authenticated identity is required' });
   }
 
-  const allowUnsignedDev = process.env.NODE_ENV !== 'production' && !INTERNAL_API_AUTH_SECRET;
-  if (!identity.verified && !allowUnsignedDev) {
+  if (!identity.verified) {
     return res.status(401).json({ ok: false, error: 'Verified internal identity is required' });
   }
 

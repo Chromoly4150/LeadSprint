@@ -4,6 +4,7 @@ const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const crypto = require('node:crypto');
 
 async function waitForHealth(baseUrl, timeoutMs = 10000) {
   const start = Date.now();
@@ -17,10 +18,26 @@ async function waitForHealth(baseUrl, timeoutMs = 10000) {
   throw new Error(`API did not become healthy within ${timeoutMs}ms`);
 }
 
+function createInternalAuthHeaders({ method = 'GET', requestPath, email, clerkUserId = 'clerk_test_user', secret, contentType = null }) {
+  const timestamp = new Date().toISOString();
+  const normalizedEmail = String(email || '').trim().toLowerCase();
+  const payload = [method.toUpperCase(), requestPath, clerkUserId, normalizedEmail, timestamp].join('\n');
+  const signature = crypto.createHmac('sha256', secret).update(payload).digest('hex');
+  const headers = {
+    'x-user-email': normalizedEmail,
+    'x-clerk-user-id': clerkUserId,
+    'x-internal-auth-ts': timestamp,
+    'x-internal-auth-signature': signature,
+  };
+  if (contentType) headers['content-type'] = contentType;
+  return headers;
+}
+
 function startApi() {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'leadsprint-api-test-'));
   const dbPath = path.join(tmpDir, 'leadgen.sqlite');
   const port = 4100 + Math.floor(Math.random() * 400);
+  const internalApiAuthSecret = `test-secret-${crypto.randomUUID()}`;
 
   const child = spawn(process.execPath, ['src/index.js'], {
     cwd: path.join(__dirname, '..'),
@@ -28,6 +45,7 @@ function startApi() {
       ...process.env,
       PORT: String(port),
       DATABASE_PATH: dbPath,
+      INTERNAL_API_AUTH_SECRET: internalApiAuthSecret,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -35,6 +53,9 @@ function startApi() {
   return {
     baseUrl: `http://127.0.0.1:${port}`,
     child,
+    authHeaders(requestPath, { method = 'GET', email, clerkUserId, contentType = null } = {}) {
+      return createInternalAuthHeaders({ method, requestPath, email, clerkUserId, secret: internalApiAuthSecret, contentType });
+    },
     cleanup: () => {
       if (!child.killed) child.kill('SIGTERM');
       fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -66,14 +87,18 @@ test('lead intake + list + detail + status happy path', async (t) => {
 
   const leadId = intakeJson.lead.id;
 
-  const listRes = await fetch(`${api.baseUrl}/api/leads?status=new`);
+  const listRes = await fetch(`${api.baseUrl}/api/leads?status=new`, {
+    headers: api.authHeaders('/api/leads', { email: 'owner@leadsprint.local', clerkUserId: 'clerk_owner' }),
+  });
   assert.equal(listRes.status, 200);
   const listJson = await listRes.json();
   assert.equal(listJson.ok, true);
   assert.ok(Array.isArray(listJson.leads));
   assert.ok(listJson.leads.some((l) => l.id === leadId));
 
-  const detailRes = await fetch(`${api.baseUrl}/api/leads/${leadId}`);
+  const detailRes = await fetch(`${api.baseUrl}/api/leads/${leadId}`, {
+    headers: api.authHeaders(`/api/leads/${leadId}`, { email: 'owner@leadsprint.local', clerkUserId: 'clerk_owner' }),
+  });
   assert.equal(detailRes.status, 200);
   const detailJson = await detailRes.json();
   assert.equal(detailJson.ok, true);
@@ -82,7 +107,12 @@ test('lead intake + list + detail + status happy path', async (t) => {
 
   const statusRes = await fetch(`${api.baseUrl}/api/leads/${leadId}/status`, {
     method: 'PATCH',
-    headers: { 'content-type': 'application/json' },
+    headers: api.authHeaders(`/api/leads/${leadId}/status`, {
+      method: 'PATCH',
+      email: 'owner@leadsprint.local',
+      clerkUserId: 'clerk_owner',
+      contentType: 'application/json',
+    }),
     body: JSON.stringify({ status: 'contacted' }),
   });
   assert.equal(statusRes.status, 200);
@@ -125,7 +155,12 @@ test('status update rejects invalid status with 400', async (t) => {
 
   const res = await fetch(`${api.baseUrl}/api/leads/${lead.id}/status`, {
     method: 'PATCH',
-    headers: { 'content-type': 'application/json' },
+    headers: api.authHeaders(`/api/leads/${lead.id}/status`, {
+      method: 'PATCH',
+      email: 'owner@leadsprint.local',
+      clerkUserId: 'clerk_owner',
+      contentType: 'application/json',
+    }),
     body: JSON.stringify({ status: 'invalid' }),
   });
 
@@ -135,23 +170,68 @@ test('status update rejects invalid status with 400', async (t) => {
   assert.match(json.error, /status must be one of/);
 });
 
+test('protected lead routes reject anonymous requests', async (t) => {
+  const api = startApi();
+  t.after(api.cleanup);
+
+  await waitForHealth(api.baseUrl);
+
+  const intake = await fetch(`${api.baseUrl}/api/leads/intake`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ fullName: 'Anon Lead', email: 'anon@example.com' }),
+  });
+  assert.equal(intake.status, 201);
+  const intakeJson = await intake.json();
+
+  const listRes = await fetch(`${api.baseUrl}/api/leads`);
+  assert.equal(listRes.status, 401);
+
+  const detailRes = await fetch(`${api.baseUrl}/api/leads/${intakeJson.lead.id}`);
+  assert.equal(detailRes.status, 401);
+
+  const statusRes = await fetch(`${api.baseUrl}/api/leads/${intakeJson.lead.id}/status`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ status: 'contacted' }),
+  });
+  assert.equal(statusRes.status, 401);
+
+  const eventsRes = await fetch(`${api.baseUrl}/api/leads/${intakeJson.lead.id}/events`);
+  assert.equal(eventsRes.status, 401);
+
+  const contactLogRes = await fetch(`${api.baseUrl}/api/leads/${intakeJson.lead.id}/contact-log`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ direction: 'outbound', channel: 'email', body: 'hello' }),
+  });
+  assert.equal(contactLogRes.status, 401);
+});
+
 test('user organization roles enforce owner protections', async (t) => {
   const api = startApi();
   t.after(api.cleanup);
 
   await waitForHealth(api.baseUrl);
 
-  const initialUsersRes = await fetch(`${api.baseUrl}/api/users`);
+  const initialUsersRes = await fetch(`${api.baseUrl}/api/users`, {
+    headers: api.authHeaders('/api/users', { email: 'owner@leadsprint.local', clerkUserId: 'clerk_owner' }),
+  });
   const initialUsersJson = await initialUsersRes.json();
   assert.equal(initialUsersJson.ok, true);
   const owner = initialUsersJson.users.find((u) => u.role === 'company_owner');
   assert.ok(owner, 'expected a seeded company owner');
 
-  const ownerHeaders = { 'content-type': 'application/json', 'x-user-email': owner.email };
+  const ownerPostHeaders = api.authHeaders('/api/users', {
+    method: 'POST',
+    email: owner.email,
+    clerkUserId: 'clerk_owner',
+    contentType: 'application/json',
+  });
 
   const addAdminRes = await fetch(`${api.baseUrl}/api/users`, {
     method: 'POST',
-    headers: ownerHeaders,
+    headers: ownerPostHeaders,
     body: JSON.stringify({ fullName: 'Alex Admin', email: 'alex.admin@example.com', role: 'company_admin' }),
   });
   assert.equal(addAdminRes.status, 201);
@@ -160,7 +240,7 @@ test('user organization roles enforce owner protections', async (t) => {
 
   const removeOwnerRes = await fetch(`${api.baseUrl}/api/users/${owner.id}`, {
     method: 'DELETE',
-    headers: { 'x-user-email': owner.email },
+    headers: api.authHeaders(`/api/users/${owner.id}`, { method: 'DELETE', email: owner.email, clerkUserId: 'clerk_owner' }),
   });
   assert.equal(removeOwnerRes.status, 400);
   const removeOwnerJson = await removeOwnerRes.json();
@@ -168,7 +248,7 @@ test('user organization roles enforce owner protections', async (t) => {
 
   const removeAdminRes = await fetch(`${api.baseUrl}/api/users/${addAdminJson.user.id}`, {
     method: 'DELETE',
-    headers: { 'x-user-email': owner.email },
+    headers: api.authHeaders(`/api/users/${addAdminJson.user.id}`, { method: 'DELETE', email: owner.email, clerkUserId: 'clerk_owner' }),
   });
   assert.equal(removeAdminRes.status, 200);
   const removeAdminJson = await removeAdminRes.json();
@@ -183,18 +263,23 @@ test('agents cannot access owner/admin-protected routes', async (t) => {
 
   const createAgent = await fetch(`${api.baseUrl}/api/users`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-user-email': 'owner@leadsprint.local' },
+    headers: api.authHeaders('/api/users', {
+      method: 'POST',
+      email: 'owner@leadsprint.local',
+      clerkUserId: 'clerk_owner',
+      contentType: 'application/json',
+    }),
     body: JSON.stringify({ fullName: 'Avery Agent', email: 'avery.agent@example.com', role: 'company_agent' }),
   });
   assert.equal(createAgent.status, 201);
 
   const usersRes = await fetch(`${api.baseUrl}/api/users`, {
-    headers: { 'x-user-email': 'avery.agent@example.com' },
+    headers: api.authHeaders('/api/users', { email: 'avery.agent@example.com', clerkUserId: 'clerk_avery' }),
   });
   assert.equal(usersRes.status, 403);
 
   const settingsRes = await fetch(`${api.baseUrl}/api/settings/business`, {
-    headers: { 'x-user-email': 'avery.agent@example.com' },
+    headers: api.authHeaders('/api/settings/business', { email: 'avery.agent@example.com', clerkUserId: 'clerk_avery' }),
   });
   assert.equal(settingsRes.status, 403);
 });
@@ -207,7 +292,12 @@ test('ai settings can be updated and manual lead draft runs are org-scoped', asy
 
   const putAiSettings = await fetch(`${api.baseUrl}/api/settings/ai`, {
     method: 'PUT',
-    headers: { 'content-type': 'application/json', 'x-user-email': 'owner@leadsprint.local' },
+    headers: api.authHeaders('/api/settings/ai', {
+      method: 'PUT',
+      email: 'owner@leadsprint.local',
+      clerkUserId: 'clerk_owner',
+      contentType: 'application/json',
+    }),
     body: JSON.stringify({
       aiEnabled: true,
       defaultMode: 'draft_only',
@@ -239,7 +329,12 @@ test('ai settings can be updated and manual lead draft runs are org-scoped', asy
 
   const draftRes = await fetch(`${api.baseUrl}/api/leads/${createLeadJson.lead.id}/ai/draft-response`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-user-email': 'owner@leadsprint.local' },
+    headers: api.authHeaders(`/api/leads/${createLeadJson.lead.id}/ai/draft-response`, {
+      method: 'POST',
+      email: 'owner@leadsprint.local',
+      clerkUserId: 'clerk_owner',
+      contentType: 'application/json',
+    }),
   });
   assert.equal(draftRes.status, 200);
   const draftJson = await draftRes.json();
@@ -248,7 +343,7 @@ test('ai settings can be updated and manual lead draft runs are org-scoped', asy
   assert.match(draftJson.draft.draft, /https:\/\/calendly.com\/test-link/);
 
   const runsRes = await fetch(`${api.baseUrl}/api/ai/runs`, {
-    headers: { 'x-user-email': 'owner@leadsprint.local' },
+    headers: api.authHeaders('/api/ai/runs', { email: 'owner@leadsprint.local', clerkUserId: 'clerk_owner' }),
   });
   assert.equal(runsRes.status, 200);
   const runsJson = await runsRes.json();
@@ -263,7 +358,12 @@ test('platform owner can create internal platform operators', async (t) => {
 
   const createInternal = await fetch(`${api.baseUrl}/api/users`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-user-email': 'josiahricheson@gmail.com' },
+    headers: api.authHeaders('/api/users', {
+      method: 'POST',
+      email: 'josiahricheson@gmail.com',
+      clerkUserId: 'clerk_platform_owner',
+      contentType: 'application/json',
+    }),
     body: JSON.stringify({ fullName: 'Pat Platform', email: 'pat.platform@example.com', role: 'platform_sme' }),
   });
   assert.equal(createInternal.status, 201);
@@ -273,7 +373,12 @@ test('platform owner can create internal platform operators', async (t) => {
 
   const companyOwnerCreatePlatform = await fetch(`${api.baseUrl}/api/users`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-user-email': 'owner@leadsprint.local' },
+    headers: api.authHeaders('/api/users', {
+      method: 'POST',
+      email: 'owner@leadsprint.local',
+      clerkUserId: 'clerk_owner',
+      contentType: 'application/json',
+    }),
     body: JSON.stringify({ fullName: 'Nope', email: 'nope.platform@example.com', role: 'platform_agent' }),
   });
   assert.equal(companyOwnerCreatePlatform.status, 403);
@@ -287,7 +392,12 @@ test('permission overrides can grant agent access to business settings', async (
 
   const createAgent = await fetch(`${api.baseUrl}/api/users`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-user-email': 'owner@leadsprint.local' },
+    headers: api.authHeaders('/api/users', {
+      method: 'POST',
+      email: 'owner@leadsprint.local',
+      clerkUserId: 'clerk_owner',
+      contentType: 'application/json',
+    }),
     body: JSON.stringify({ fullName: 'Sam Agent', email: 'sam.agent@example.com', role: 'company_agent' }),
   });
   assert.equal(createAgent.status, 201);
@@ -295,18 +405,23 @@ test('permission overrides can grant agent access to business settings', async (
 
   const grantRes = await fetch(`${api.baseUrl}/api/users/${created.user.id}/permissions`, {
     method: 'PUT',
-    headers: { 'content-type': 'application/json', 'x-user-email': 'owner@leadsprint.local' },
+    headers: api.authHeaders(`/api/users/${created.user.id}/permissions`, {
+      method: 'PUT',
+      email: 'owner@leadsprint.local',
+      clerkUserId: 'clerk_owner',
+      contentType: 'application/json',
+    }),
     body: JSON.stringify({ permissions: { 'settings.manageBusiness': true } }),
   });
   assert.equal(grantRes.status, 200);
 
   const settingsRes = await fetch(`${api.baseUrl}/api/settings/business`, {
-    headers: { 'x-user-email': 'sam.agent@example.com' },
+    headers: api.authHeaders('/api/settings/business', { email: 'sam.agent@example.com', clerkUserId: 'clerk_sam' }),
   });
   assert.equal(settingsRes.status, 200);
 
   const mePermsRes = await fetch(`${api.baseUrl}/api/me/permissions`, {
-    headers: { 'x-user-email': 'sam.agent@example.com' },
+    headers: api.authHeaders('/api/me/permissions', { email: 'sam.agent@example.com', clerkUserId: 'clerk_sam' }),
   });
   assert.equal(mePermsRes.status, 200);
   const mePermsJson = await mePermsRes.json();
@@ -344,7 +459,7 @@ test('public business request can be approved into activation flow and auto-prov
   assert.equal(beforeApprovalLookup.status, 404);
 
   const requestsRes = await fetch(`${api.baseUrl}/api/admin/access-requests`, {
-    headers: { 'x-user-email': 'josiahricheson@gmail.com' },
+    headers: api.authHeaders('/api/admin/access-requests', { email: 'josiahricheson@gmail.com', clerkUserId: 'clerk_platform_owner' }),
   });
   assert.equal(requestsRes.status, 200);
   const requestsJson = await requestsRes.json();
@@ -355,7 +470,12 @@ test('public business request can be approved into activation flow and auto-prov
 
   const approveRes = await fetch(`${api.baseUrl}/api/admin/access-requests/${request.id}/approve`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-user-email': 'josiahricheson@gmail.com' },
+    headers: api.authHeaders(`/api/admin/access-requests/${request.id}/approve`, {
+      method: 'POST',
+      email: 'josiahricheson@gmail.com',
+      clerkUserId: 'clerk_platform_owner',
+      contentType: 'application/json',
+    }),
     body: JSON.stringify({ reviewNotes: 'Approved for activation' }),
   });
   assert.equal(approveRes.status, 200);
@@ -374,10 +494,7 @@ test('public business request can be approved into activation flow and auto-prov
   assert.equal(activationJson.activation.requestKind, 'business_workspace');
 
   const meBeforeProvision = await fetch(`${api.baseUrl}/api/access/me`, {
-    headers: {
-      'x-user-email': 'pat@example.com',
-      'x-clerk-user-id': 'clerk_pat_123',
-    },
+    headers: api.authHeaders('/api/access/me', { email: 'pat@example.com', clerkUserId: 'clerk_pat_123' }),
   });
   assert.equal(meBeforeProvision.status, 200);
   const meBeforeProvisionJson = await meBeforeProvision.json();
@@ -388,17 +505,14 @@ test('public business request can be approved into activation flow and auto-prov
   assert.equal(meBeforeProvisionJson.user.email, 'pat@example.com');
 
   const meAfterProvision = await fetch(`${api.baseUrl}/api/access/me`, {
-    headers: {
-      'x-user-email': 'pat@example.com',
-      'x-clerk-user-id': 'clerk_pat_123',
-    },
+    headers: api.authHeaders('/api/access/me', { email: 'pat@example.com', clerkUserId: 'clerk_pat_123' }),
   });
   assert.equal(meAfterProvision.status, 200);
   const meAfterProvisionJson = await meAfterProvision.json();
   assert.equal(meAfterProvisionJson.state, 'approved');
 
   const requestsAfterRes = await fetch(`${api.baseUrl}/api/admin/access-requests`, {
-    headers: { 'x-user-email': 'josiahricheson@gmail.com' },
+    headers: api.authHeaders('/api/admin/access-requests', { email: 'josiahricheson@gmail.com', clerkUserId: 'clerk_platform_owner' }),
   });
   const requestsAfterJson = await requestsAfterRes.json();
   const requestAfter = requestsAfterJson.requests.find((row) => row.id === request.id);
@@ -429,7 +543,7 @@ test('activation endpoint rejects pending requests before approval', async (t) =
   assert.equal(submitRes.status, 201);
 
   const requestsRes = await fetch(`${api.baseUrl}/api/admin/access-requests`, {
-    headers: { 'x-user-email': 'josiahricheson@gmail.com' },
+    headers: api.authHeaders('/api/admin/access-requests', { email: 'josiahricheson@gmail.com', clerkUserId: 'clerk_platform_owner' }),
   });
   const requestsJson = await requestsRes.json();
   const request = requestsJson.requests.find((row) => row.email === 'indy@example.com');
