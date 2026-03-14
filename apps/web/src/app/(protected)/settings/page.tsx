@@ -13,6 +13,7 @@ import {
   rejectBusinessRequestAction,
   revokeInvitationAction,
   startGmailOAuthAction,
+  updateAiSettingsAction,
 } from './actions';
 
 type UserRow = { id: string; fullName: string; email: string; role: string; roleLabel?: string; status?: string; permissionOverrides?: Record<string, boolean>; permissions?: Record<string, boolean> };
@@ -39,6 +40,20 @@ type AccessRequestRow = {
   updated_at: string;
 };
 type InvitationRow = { id: string; email: string; role: string; status: string; created_at: string };
+type AiSettings = {
+  ai_enabled: number;
+  default_mode: string;
+  allowed_channels: string[];
+  allowed_actions: string[];
+  response_sla_target_minutes: number;
+  tone_profile: { defaultTone?: string };
+  business_context: { businessName?: string; bookingLink?: string };
+  usage_plan: string;
+  monthly_message_limit: number;
+  monthly_ai_token_budget: number;
+  updated_at?: string | null;
+};
+type AiRun = { id: string; workflow_type: string; status: string; mode: string; provider?: string | null; model?: string | null; lead_id?: string | null; created_at: string; completed_at?: string | null };
 
 function statusBadge(status?: string) {
   const normalized = status || 'active';
@@ -58,11 +73,13 @@ function permissionSummary(user: UserRow) {
 }
 
 export default async function SettingsPage({ searchParams }: { searchParams?: { message?: string; error?: string; q?: string; roleScope?: string } }) {
-  const [usersRes, providersRes, meRes, requestsRes] = await Promise.all([
+  const [usersRes, providersRes, meRes, requestsRes, aiSettingsRes, aiRunsRes] = await Promise.all([
     internalApiFetch<{ users: UserRow[] }>('/api/users'),
     internalApiFetch<{ providers: ProviderRow[] }>('/api/email/provider-settings'),
     internalApiFetch<{ actor: { id: string; email: string; role: string; status: string; roleLabel?: string } }>('/api/me/permissions'),
     internalApiFetch<{ requests: AccessRequestRow[] }>('/api/admin/access-requests').catch(() => ({ requests: [] })),
+    internalApiFetch<{ settings: AiSettings; updatedAt?: string | null }>('/api/settings/ai').catch(() => ({ settings: { ai_enabled: 0, default_mode: 'draft_only', allowed_channels: ['email', 'sms'], allowed_actions: ['draft_message'], response_sla_target_minutes: 5, tone_profile: { defaultTone: 'professional and warm' }, business_context: { businessName: '', bookingLink: '' }, usage_plan: 'standard', monthly_message_limit: 250, monthly_ai_token_budget: 250000 } })),
+    internalApiFetch<{ runs: AiRun[] }>('/api/ai/runs').catch(() => ({ runs: [] })),
   ]);
 
   let invitationsRes: { invitations: InvitationRow[] } | null = null;
@@ -269,6 +286,73 @@ export default async function SettingsPage({ searchParams }: { searchParams?: { 
       </section>
 
       <section style={{ ...cardStyle, marginTop: 16 }}>
+        <h2 style={{ marginTop: 0, marginBottom: 4 }}>AI control plane</h2>
+        <p style={{ marginTop: 0, color: '#6b7280' }}>Configure org-level AI behavior, allowed workflows, and review recent AI runs before exposing AI deeper in the product.</p>
+        <form action={updateAiSettingsAction} style={{ display: 'grid', gap: 12, marginBottom: 16 }}>
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+            <label><input type="checkbox" name="aiEnabled" defaultChecked={Boolean(aiSettingsRes.settings.ai_enabled)} /> Enable AI for this org</label>
+            <label>Default mode
+              <select name="defaultMode" defaultValue={aiSettingsRes.settings.default_mode} style={{ ...inputStyle, marginLeft: 8 }}>
+                <option value="draft_only">Draft only</option>
+                <option value="approval_required">Approval required</option>
+                <option value="guarded_autopilot">Guarded autopilot</option>
+              </select>
+            </label>
+            <label>SLA target (minutes)
+              <input name="responseSlaTargetMinutes" type="number" min="1" defaultValue={aiSettingsRes.settings.response_sla_target_minutes} style={{ ...inputStyle, marginLeft: 8, width: 90 }} />
+            </label>
+          </div>
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+            <label>Usage plan
+              <select name="usagePlan" defaultValue={aiSettingsRes.settings.usage_plan} style={{ ...inputStyle, marginLeft: 8 }}>
+                <option value="standard">Standard</option>
+                <option value="pro">Pro</option>
+                <option value="enterprise">Enterprise</option>
+              </select>
+            </label>
+            <label>Monthly messages
+              <input name="monthlyMessageLimit" type="number" min="1" defaultValue={aiSettingsRes.settings.monthly_message_limit} style={{ ...inputStyle, marginLeft: 8, width: 110 }} />
+            </label>
+            <label>Monthly AI token budget
+              <input name="monthlyAiTokenBudget" type="number" min="1000" step="1000" defaultValue={aiSettingsRes.settings.monthly_ai_token_budget} style={{ ...inputStyle, marginLeft: 8, width: 140 }} />
+            </label>
+          </div>
+          <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
+            <fieldset style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 12 }}>
+              <legend>Allowed channels</legend>
+              <label><input type="checkbox" name="allowedChannels" value="email" defaultChecked={aiSettingsRes.settings.allowed_channels.includes('email')} /> Email</label>{' '}
+              <label><input type="checkbox" name="allowedChannels" value="sms" defaultChecked={aiSettingsRes.settings.allowed_channels.includes('sms')} /> SMS</label>
+            </fieldset>
+            <fieldset style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 12 }}>
+              <legend>Allowed actions</legend>
+              <label><input type="checkbox" name="allowedActions" value="draft_message" defaultChecked={aiSettingsRes.settings.allowed_actions.includes('draft_message')} /> Draft message</label>
+            </fieldset>
+          </div>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            <label>Default tone
+              <input name="defaultTone" defaultValue={aiSettingsRes.settings.tone_profile?.defaultTone || 'professional and warm'} style={{ ...inputStyle, marginLeft: 8, minWidth: 220 }} />
+            </label>
+            <label>Business name in AI context
+              <input name="businessName" defaultValue={aiSettingsRes.settings.business_context?.businessName || ''} style={{ ...inputStyle, marginLeft: 8, minWidth: 220 }} />
+            </label>
+            <label>Booking link
+              <input name="bookingLink" defaultValue={aiSettingsRes.settings.business_context?.bookingLink || ''} style={{ ...inputStyle, marginLeft: 8, minWidth: 260 }} />
+            </label>
+          </div>
+          <div>
+            <button type="submit">Save AI settings</button>
+          </div>
+        </form>
+        <div style={{ display: 'grid', gap: 10, marginBottom: 16 }}>
+          <h3 style={{ margin: 0 }}>Recent AI runs</h3>
+          {aiRunsRes.runs.length === 0 ? <p style={{ margin: 0, color: '#6b7280' }}>No AI runs yet.</p> : aiRunsRes.runs.slice(0, 8).map((run) => (
+            <div key={run.id} style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 12, display: 'grid', gap: 4 }}>
+              <div style={{ fontWeight: 700 }}>{run.workflow_type}</div>
+              <div style={{ color: '#6b7280', fontSize: 12, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>{statusBadge(run.status)}<span>{run.mode}</span><span>{run.provider || 'stub'}</span><span>{run.model || 'draft-v1'}</span></div>
+              <div style={{ color: '#6b7280', fontSize: 12 }}>Lead: {run.lead_id || '—'} · Created: {run.created_at}</div>
+            </div>
+          ))}
+        </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}>
           <div>
             <h2 style={{ marginTop: 0, marginBottom: 4 }}>Platform access review</h2>

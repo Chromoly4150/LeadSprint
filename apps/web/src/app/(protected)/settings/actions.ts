@@ -199,6 +199,42 @@ export async function bootstrapGmailProviderAction() {
   }
 }
 
+export async function updateAiSettingsAction(formData: FormData) {
+  const aiEnabled = formData.get('aiEnabled') === 'on';
+  const defaultMode = String(formData.get('defaultMode') || 'draft_only');
+  const responseSlaTargetMinutes = Number(formData.get('responseSlaTargetMinutes') || 5);
+  const usagePlan = String(formData.get('usagePlan') || 'standard');
+  const monthlyMessageLimit = Number(formData.get('monthlyMessageLimit') || 250);
+  const monthlyAiTokenBudget = Number(formData.get('monthlyAiTokenBudget') || 250000);
+  const allowedChannels = formData.getAll('allowedChannels').map(String);
+  const allowedActions = formData.getAll('allowedActions').map(String);
+  const defaultTone = String(formData.get('defaultTone') || 'professional and warm').trim();
+  const businessName = String(formData.get('businessName') || '').trim();
+  const bookingLink = String(formData.get('bookingLink') || '').trim();
+
+  try {
+    await internalApiFetch('/api/settings/ai', {
+      method: 'PUT',
+      body: JSON.stringify({
+        aiEnabled,
+        defaultMode,
+        responseSlaTargetMinutes,
+        usagePlan,
+        monthlyMessageLimit,
+        monthlyAiTokenBudget,
+        allowedChannels,
+        allowedActions,
+        toneProfile: { defaultTone },
+        businessContext: { businessName, bookingLink },
+      }),
+    });
+    revalidatePath('/settings');
+    settingsRedirect('AI settings saved.');
+  } catch (error) {
+    settingsRedirect(undefined, error instanceof Error ? error.message : 'Could not save AI settings.');
+  }
+}
+
 export async function startGmailOAuthAction() {
   const res = await internalApiFetch<{ authUrl: string }>('/api/auth/gmail/start');
   redirect(res.authUrl);
