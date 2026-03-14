@@ -1032,6 +1032,25 @@ app.get('/api/ai/runs', requirePermission('communications.view'), (req, res) => 
   res.json({ ok: true, runs: rows });
 });
 
+app.get('/api/platform/directory', requirePermission('platform.users.manage'), (req, res) => {
+  const q = normalizeString(req.query.q || '').toLowerCase();
+  const limit = Math.min(Number(req.query.limit || 25), 100);
+
+  const users = q
+    ? db.prepare(`SELECT u.*, o.name AS organization_name FROM users u LEFT JOIN organizations o ON o.id = u.organization_id WHERE lower(u.full_name) LIKE ? OR lower(u.email) LIKE ? OR lower(o.name) LIKE ? ORDER BY u.created_at DESC LIMIT ?`).all(`%${q}%`, `%${q}%`, `%${q}%`, limit)
+    : db.prepare(`SELECT u.*, o.name AS organization_name FROM users u LEFT JOIN organizations o ON o.id = u.organization_id ORDER BY u.created_at DESC LIMIT ?`).all(limit);
+
+  const organizations = q
+    ? db.prepare(`SELECT * FROM organizations WHERE lower(name) LIKE ? ORDER BY created_at DESC LIMIT ?`).all(`%${q}%`, limit)
+    : db.prepare(`SELECT * FROM organizations ORDER BY created_at DESC LIMIT ?`).all(limit);
+
+  res.json({
+    ok: true,
+    users: users.map((row) => ({ ...serializeUser(row), organizationName: row.organization_name })),
+    organizations,
+  });
+});
+
 app.get('/api/admin/access-requests', requirePermission('platform.accessRequests.review'), (req, res) => {
   const rows = db.prepare(`SELECT id, clerk_user_id, email, full_name, request_kind, role_title, organization_name, website, line_of_business, requested_features_json, team_size, authority_attestation, notes, status, review_notes, reviewed_at, activation_token, activated_at, created_at, updated_at FROM access_requests ORDER BY created_at DESC`).all();
   res.json({

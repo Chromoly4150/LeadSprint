@@ -11,6 +11,9 @@ export default async function OnboardingPage() {
   const provisioning = await getProvisioningState();
 
   if (provisioning.state === 'signed_out') redirect('/request-access');
+  if (provisioning.state === 'approved' && provisioning.user?.role?.startsWith('platform_')) {
+    redirect('/dashboard');
+  }
   if (provisioning.state === 'pending' || provisioning.state === 'needs_follow_up' || provisioning.state === 'rejected' || provisioning.state === 'invited') {
     redirect('/access-status');
   }
