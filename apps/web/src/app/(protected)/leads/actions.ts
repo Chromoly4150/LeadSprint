@@ -8,11 +8,26 @@ async function apiMutation(path: string, init: RequestInit) {
   return internalApiFetch(path, init);
 }
 
-function leadsRedirect(leadId: string, message?: string, error?: string) {
-  const params = new URLSearchParams({ selected: leadId });
+function getReturnPath(formData: FormData, leadId: string) {
+  const returnTo = String(formData.get('returnTo') || '').trim();
+  if (returnTo === 'inbox-thread') return `/inbox/${leadId}`;
+  return `/leads?selected=${leadId}`;
+}
+
+function leadSurfaceRedirect(leadId: string, formData: FormData, message?: string, error?: string) {
+  const base = getReturnPath(formData, leadId);
+  const params = new URLSearchParams();
+  if (base.includes('?')) {
+    const [path, search] = base.split('?');
+    const existing = new URLSearchParams(search || '');
+    existing.forEach((value, key) => params.set(key, value));
+    if (message) params.set('message', message);
+    if (error) params.set('error', error);
+    redirect(`${path}?${params.toString()}`);
+  }
   if (message) params.set('message', message);
   if (error) params.set('error', error);
-  redirect(`/leads?${params.toString()}`);
+  redirect(params.size ? `${base}?${params.toString()}` : base);
 }
 
 export async function updateLeadStatusAction(formData: FormData) {
@@ -21,7 +36,9 @@ export async function updateLeadStatusAction(formData: FormData) {
   if (!leadId || !status) return;
   await apiMutation(`/api/leads/${leadId}/status`, { method: 'PATCH', body: JSON.stringify({ status }) });
   revalidatePath('/leads');
-  redirect(`/leads?selected=${leadId}`);
+  revalidatePath('/inbox');
+  revalidatePath(`/inbox/${leadId}`);
+  leadSurfaceRedirect(leadId, formData);
 }
 
 export async function updateLeadUrgencyAction(formData: FormData) {
@@ -30,7 +47,9 @@ export async function updateLeadUrgencyAction(formData: FormData) {
   if (!leadId || !urgencyStatus) return;
   await apiMutation(`/api/leads/${leadId}/urgency`, { method: 'PATCH', body: JSON.stringify({ urgencyStatus }) });
   revalidatePath('/leads');
-  redirect(`/leads?selected=${leadId}`);
+  revalidatePath('/inbox');
+  revalidatePath(`/inbox/${leadId}`);
+  leadSurfaceRedirect(leadId, formData);
 }
 
 export async function addLeadNoteAction(formData: FormData) {
@@ -39,7 +58,9 @@ export async function addLeadNoteAction(formData: FormData) {
   if (!leadId || !content) return;
   await apiMutation(`/api/leads/${leadId}/notes`, { method: 'POST', body: JSON.stringify({ content, noteType: 'general' }) });
   revalidatePath('/leads');
-  redirect(`/leads?selected=${leadId}`);
+  revalidatePath('/inbox');
+  revalidatePath(`/inbox/${leadId}`);
+  leadSurfaceRedirect(leadId, formData);
 }
 
 export async function addCommunicationAction(formData: FormData) {
@@ -52,7 +73,9 @@ export async function addCommunicationAction(formData: FormData) {
   if (!leadId || (!summary && !content)) return;
   await apiMutation(`/api/leads/${leadId}/communications`, { method: 'POST', body: JSON.stringify({ channel, direction, subject, summary, content }) });
   revalidatePath('/leads');
-  redirect(`/leads?selected=${leadId}`);
+  revalidatePath('/inbox');
+  revalidatePath(`/inbox/${leadId}`);
+  leadSurfaceRedirect(leadId, formData);
 }
 
 export async function createDraftAction(formData: FormData) {
@@ -63,17 +86,21 @@ export async function createDraftAction(formData: FormData) {
   if (!leadId || !toEmail || !subject || !body) return;
   await apiMutation(`/api/leads/${leadId}/email-drafts`, { method: 'POST', body: JSON.stringify({ toEmail, subject, body, source: 'manual' }) });
   revalidatePath('/leads');
-  redirect(`/leads?selected=${leadId}`);
+  revalidatePath('/inbox');
+  revalidatePath(`/inbox/${leadId}`);
+  leadSurfaceRedirect(leadId, formData);
 }
 
 export async function queueOutboxAction(formData: FormData) {
   const leadId = String(formData.get('leadId') || '');
   const emailDraftId = String(formData.get('emailDraftId') || '').trim();
-  const providerKey = String(formData.get('providerKey') || 'gmail').trim();
+  const emailAccountId = String(formData.get('emailAccountId') || '').trim();
   if (!leadId) return;
-  await apiMutation(`/api/leads/${leadId}/email-outbox`, { method: 'POST', body: JSON.stringify({ emailDraftId: emailDraftId || undefined, providerKey }) });
+  await apiMutation(`/api/leads/${leadId}/email-outbox`, { method: 'POST', body: JSON.stringify({ emailDraftId: emailDraftId || undefined, emailAccountId: emailAccountId || undefined }) });
   revalidatePath('/leads');
-  redirect(`/leads?selected=${leadId}`);
+  revalidatePath('/inbox');
+  revalidatePath(`/inbox/${leadId}`);
+  leadSurfaceRedirect(leadId, formData, 'Outbox item queued.');
 }
 
 export async function generateAiDraftAction(formData: FormData) {
@@ -93,8 +120,41 @@ export async function generateAiDraftAction(formData: FormData) {
       body: JSON.stringify({ toEmail, subject: res.draft.subject, body: res.draft.draft, source: 'ai' }),
     });
     revalidatePath('/leads');
-    leadsRedirect(leadId, `AI draft created: ${res.draft.subject}`);
+    revalidatePath('/inbox');
+    revalidatePath(`/inbox/${leadId}`);
+    leadSurfaceRedirect(leadId, formData, `AI draft created: ${res.draft.subject}`);
   } catch (error) {
-    leadsRedirect(leadId, undefined, error instanceof Error ? error.message : 'Could not generate AI draft.');
+    leadSurfaceRedirect(leadId, formData, undefined, error instanceof Error ? error.message : 'Could not generate AI draft.');
+  }
+}
+
+export async function processOutboxItemAction(formData: FormData) {
+  const leadId = String(formData.get('leadId') || '').trim();
+  const outboxItemId = String(formData.get('outboxItemId') || '').trim();
+  if (!leadId || !outboxItemId) return;
+  try {
+    await apiMutation(`/api/email-outbox/${outboxItemId}/process`, { method: 'POST', body: JSON.stringify({}) });
+    revalidatePath('/leads');
+    revalidatePath('/inbox');
+    revalidatePath(`/inbox/${leadId}`);
+    leadSurfaceRedirect(leadId, formData, 'Outbox item processed.');
+  } catch (error) {
+    leadSurfaceRedirect(leadId, formData, undefined, error instanceof Error ? error.message : 'Could not process outbox item.');
+  }
+}
+
+export async function processLeadOutboxQueueAction(formData: FormData) {
+  const leadId = String(formData.get('leadId') || '').trim();
+  if (!leadId) return;
+  try {
+    const result = await apiMutation(`/api/leads/${leadId}/email-outbox/process`, { method: 'POST', body: JSON.stringify({}) }) as { summary?: { processed: number; failed: number } };
+    revalidatePath('/leads');
+    revalidatePath('/inbox');
+    revalidatePath(`/inbox/${leadId}`);
+    const processed = result?.summary?.processed || 0;
+    const failed = result?.summary?.failed || 0;
+    leadSurfaceRedirect(leadId, formData, `Processed ${processed} outbox item(s)${failed ? `, ${failed} failed` : ''}.`);
+  } catch (error) {
+    leadSurfaceRedirect(leadId, formData, undefined, error instanceof Error ? error.message : 'Could not process lead outbox queue.');
   }
 }

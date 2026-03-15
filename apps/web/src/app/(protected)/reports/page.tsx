@@ -1,14 +1,18 @@
 import { AppShell, cardStyle } from '../../../components/app-shell';
 import { apiFetch } from '../../../lib/api';
+import { buildPrimaryNav } from '../../../lib/surfaces';
 
 export default async function ReportsPage() {
-  const [summaryRes, reportRes] = await Promise.all([
+  const [summaryRes, reportRes, accessRes] = await Promise.all([
     apiFetch<{ summary: { totalLeads: number; hotLeads: number; bookedLeads: number; conversionRate: number } }>('/api/dashboard/summary'),
     apiFetch<{ rows: Array<{ status: string; urgencyStatus: string; count: number }> }>('/api/reports/status-summary'),
+    apiFetch<{ workspace?: { slug?: string }; user?: { role: string } }>('/api/access/me'),
   ]);
 
+  const navItems = buildPrimaryNav({ role: accessRes.user?.role || 'company_owner', workspaceSlug: accessRes.workspace?.slug });
+
   return (
-    <AppShell title="Reports" subtitle="Route extracted from the monolithic MVP screen">
+    <AppShell title="Reports" subtitle="Route extracted from the monolithic MVP screen" navItems={navItems}>
       <section style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0 }}>Status / urgency summary</h2>

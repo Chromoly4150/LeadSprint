@@ -1,10 +1,12 @@
 import { AppShell, cardStyle, inputStyle } from '../../../components/app-shell';
 import { apiFetch } from '../../../lib/api';
+import { buildPrimaryNav } from '../../../lib/surfaces';
 import {
   addCommunicationAction,
   addLeadNoteAction,
   createDraftAction,
   generateAiDraftAction,
+  processOutboxItemAction,
   queueOutboxAction,
   updateLeadStatusAction,
   updateLeadUrgencyAction,
@@ -14,9 +16,11 @@ type SearchParams = { selected?: string; message?: string; error?: string };
 
 export default async function LeadsPage({ searchParams }: { searchParams?: Promise<SearchParams> }) {
   const params = (await searchParams) || {};
-  const [leadsRes, usersRes] = await Promise.all([
+  const [leadsRes, usersRes, accessRes, emailAccountsRes] = await Promise.all([
     apiFetch<{ leads: Array<{ id: string; fullName: string; email: string | null; phone: string | null; source: string; message: string | null; status: string; urgencyStatus: string; assignedUserId: string | null; assignedUserName: string | null; ownerUserName: string | null; lastContactedAt: string | null }> }>('/api/leads?limit=50'),
     apiFetch<{ users: Array<{ id: string; fullName: string; role: string }> }>('/api/users-lite'),
+    apiFetch<{ workspace?: { slug?: string }; user?: { role: string } }>('/api/access/me'),
+    apiFetch<{ accounts: Array<{ id: string; emailAddress: string; scopeType: string; providerType: string; providerKey?: string | null; status: string; isDefaultForOrg?: boolean; isDefaultForUser?: boolean }> }>('/api/email/accounts/sendable').catch(() => ({ accounts: [] })),
   ]);
 
   const leads = leadsRes.leads;
@@ -31,7 +35,7 @@ export default async function LeadsPage({ searchParams }: { searchParams?: Promi
         apiFetch<{ notes: Array<{ id: string; content: string; noteType: string; authorName: string; createdAt: string }> }>(`/api/leads/${selectedLead.id}/notes`),
         apiFetch<{ communications: Array<{ id: string; channel: string; direction: string; actorName: string; subject: string | null; summary: string; content: string; occurredAt: string }> }>(`/api/leads/${selectedLead.id}/communications`),
         apiFetch<{ drafts: Array<{ id: string; toEmail: string; subject: string; body: string; status: string; createdAt: string; createdByName: string }> }>(`/api/leads/${selectedLead.id}/email-drafts`),
-        apiFetch<{ items: Array<{ id: string; providerKey: string; sendStatus: string; queuedAt: string; sentAt: string | null; failedAt: string | null; lastError: string | null; subject: string; toEmail: string; emailDraftId: string | null }> }>(`/api/leads/${selectedLead.id}/email-outbox`),
+        apiFetch<{ items: Array<{ id: string; providerKey: string; sendStatus: string; queuedAt: string; sentAt: string | null; failedAt: string | null; lastError: string | null; subject: string; toEmail: string; emailDraftId: string | null; createdByName?: string; updatedAt?: string | null; lastAttemptAt?: string | null; canProcess?: boolean; isFailed?: boolean; isQueued?: boolean; isSent?: boolean; senderEmailAddress?: string | null; senderDisplayName?: string | null }> }>(`/api/leads/${selectedLead.id}/email-outbox`),
       ])
     : [null, null, null, null, null];
 
@@ -41,9 +45,11 @@ export default async function LeadsPage({ searchParams }: { searchParams?: Promi
   const communications = commsRes?.communications ?? [];
   const drafts = draftsRes?.drafts ?? [];
   const outbox = outboxRes?.items ?? [];
+  const sendableAccounts = emailAccountsRes.accounts || [];
+  const navItems = buildPrimaryNav({ role: accessRes.user?.role || 'company_owner', workspaceSlug: accessRes.workspace?.slug });
 
   return (
-    <AppShell title="Leads" subtitle="Split queue + interactive detail workspace on remote main">
+    <AppShell title="Leads" subtitle="Split queue + interactive detail workspace on remote main" navItems={navItems}>
       {flashMessage ? <section style={{ ...cardStyle, marginBottom: 16, border: '1px solid #bbf7d0', background: '#f0fdf4', color: '#166534' }}>{flashMessage}</section> : null}
       {flashError ? <section style={{ ...cardStyle, marginBottom: 16, border: '1px solid #fecaca', background: '#fef2f2', color: '#991b1b' }}>{flashError}</section> : null}
       <section style={{ display: 'grid', gridTemplateColumns: '0.95fr 1.5fr', gap: 16 }}>
@@ -88,6 +94,7 @@ export default async function LeadsPage({ searchParams }: { searchParams?: Promi
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginTop: 16 }}>
                   <form action={updateLeadStatusAction}>
+                    <input type="hidden" name="returnTo" value="leads" />
                     <input type="hidden" name="leadId" value={lead.id} />
                     <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>Status</div>
                     <select name="status" style={{ ...inputStyle, width: '100%' }} defaultValue={lead.status}>
@@ -99,6 +106,7 @@ export default async function LeadsPage({ searchParams }: { searchParams?: Promi
                     <button type="submit" style={{ marginTop: 8, ...inputStyle, background: '#eef2ff', cursor: 'pointer' }}>Update status</button>
                   </form>
                   <form action={updateLeadUrgencyAction}>
+                    <input type="hidden" name="returnTo" value="leads" />
                     <input type="hidden" name="leadId" value={lead.id} />
                     <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>Urgency</div>
                     <select name="urgencyStatus" style={{ ...inputStyle, width: '100%' }} defaultValue={lead.urgencyStatus}>
@@ -114,6 +122,7 @@ export default async function LeadsPage({ searchParams }: { searchParams?: Promi
                     <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>Message</div>
                     <div style={{ fontSize: 14 }}>{lead.message || 'No intake message provided.'}</div>
                     <form action={generateAiDraftAction} style={{ marginTop: 10 }}>
+                      <input type="hidden" name="returnTo" value="leads" />
                       <input type="hidden" name="leadId" value={lead.id} />
                       <input type="hidden" name="toEmail" value={lead.email || ''} />
                       <button type="submit" style={{ ...inputStyle, background: '#dcfce7', cursor: 'pointer' }}>Generate AI draft</button>
@@ -126,6 +135,7 @@ export default async function LeadsPage({ searchParams }: { searchParams?: Promi
                 <article style={cardStyle}>
                   <h3 style={{ marginTop: 0 }}>Internal notes</h3>
                   <form action={addLeadNoteAction} style={{ display: 'grid', gap: 8, marginBottom: 12 }}>
+                    <input type="hidden" name="returnTo" value="leads" />
                     <input type="hidden" name="leadId" value={lead.id} />
                     <textarea name="content" rows={3} style={{ ...inputStyle, width: '100%' }} placeholder="Add internal context or next-step notes" />
                     <button type="submit" style={{ ...inputStyle, background: '#eef2ff', cursor: 'pointer' }}>Add note</button>
@@ -144,6 +154,7 @@ export default async function LeadsPage({ searchParams }: { searchParams?: Promi
                 <article style={cardStyle}>
                   <h3 style={{ marginTop: 0 }}>Communications</h3>
                   <form action={addCommunicationAction} style={{ display: 'grid', gap: 8, marginBottom: 12 }}>
+                    <input type="hidden" name="returnTo" value="leads" />
                     <input type="hidden" name="leadId" value={lead.id} />
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
                       <select name="channel" style={inputStyle} defaultValue="email">
@@ -179,6 +190,7 @@ export default async function LeadsPage({ searchParams }: { searchParams?: Promi
                 <article style={cardStyle}>
                   <h3 style={{ marginTop: 0 }}>Email drafts</h3>
                   <form action={createDraftAction} style={{ display: 'grid', gap: 8, marginBottom: 12 }}>
+                      <input type="hidden" name="returnTo" value="leads" />
                     <input type="hidden" name="leadId" value={lead.id} />
                     <input name="toEmail" defaultValue={lead.email || ''} style={inputStyle} placeholder="Recipient email" />
                     <input name="subject" style={inputStyle} placeholder="Draft subject" />
@@ -200,24 +212,39 @@ export default async function LeadsPage({ searchParams }: { searchParams?: Promi
                 <article style={cardStyle}>
                   <h3 style={{ marginTop: 0 }}>Email outbox</h3>
                   <form action={queueOutboxAction} style={{ display: 'grid', gap: 8, marginBottom: 12 }}>
+                    <input type="hidden" name="returnTo" value="leads" />
                     <input type="hidden" name="leadId" value={lead.id} />
                     <select name="emailDraftId" style={inputStyle} defaultValue="">
                       <option value="">Queue latest/inline draft</option>
                       {drafts.map((draft) => <option key={draft.id} value={draft.id}>{draft.subject}</option>)}
                     </select>
-                    <select name="providerKey" style={inputStyle} defaultValue="gmail">
-                      <option value="gmail">gmail</option>
-                      <option value="stub">stub</option>
+                    <select name="emailAccountId" style={inputStyle} defaultValue={sendableAccounts.find((account) => account.isDefaultForUser || account.isDefaultForOrg)?.id || ''}>
+                      <option value="">Use default sending account</option>
+                      {sendableAccounts.map((account) => <option key={account.id} value={account.id}>{account.emailAddress} · {account.scopeType} · {account.providerKey || account.providerType} · {account.status}</option>)}
                     </select>
                     <button type="submit" style={{ ...inputStyle, background: '#eef2ff', cursor: 'pointer' }}>Queue outbox item</button>
                   </form>
                   <div style={{ display: 'grid', gap: 8 }}>
                     {outbox.length ? outbox.map((item) => (
-                      <div key={item.id} style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 10 }}>
-                        <div style={{ fontWeight: 600 }}>{item.subject}</div>
-                        <div style={{ color: '#6b7280', fontSize: 12 }}>{item.toEmail} · {item.providerKey} · {item.sendStatus}</div>
-                        <div style={{ color: '#6b7280', fontSize: 12 }}>Queued {new Date(item.queuedAt).toLocaleString()}</div>
+                      <div key={item.id} style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 10, background: item.isFailed ? '#fef2f2' : item.isSent ? '#f0fdf4' : '#fff' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+                          <div style={{ fontWeight: 600 }}>{item.subject}</div>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: item.isFailed ? '#991b1b' : item.isSent ? '#166534' : '#92400e' }}>{item.sendStatus}</div>
+                        </div>
+                        <div style={{ color: '#6b7280', fontSize: 12 }}>{item.toEmail} · {item.providerKey}</div>
+                        <div style={{ color: '#6b7280', fontSize: 12 }}>Queued {new Date(item.queuedAt).toLocaleString()} · By {item.createdByName || 'System'}</div>
+                        <div style={{ color: '#6b7280', fontSize: 12 }}>Sender: {item.senderDisplayName || item.senderEmailAddress || item.providerKey || 'default'}</div>
+                        {item.sentAt ? <div style={{ color: '#166534', fontSize: 12 }}>Sent {new Date(item.sentAt).toLocaleString()}</div> : null}
+                        {item.failedAt ? <div style={{ color: '#991b1b', fontSize: 12 }}>Failed {new Date(item.failedAt).toLocaleString()}</div> : null}
                         {item.lastError ? <div style={{ color: '#991b1b', fontSize: 12, marginTop: 6 }}>{item.lastError}</div> : null}
+                        {item.canProcess ? (
+                          <form action={processOutboxItemAction} style={{ marginTop: 8 }}>
+                            <input type="hidden" name="leadId" value={lead.id} />
+                            <input type="hidden" name="outboxItemId" value={item.id} />
+                            <input type="hidden" name="returnTo" value="leads" />
+                            <button type="submit" style={{ ...inputStyle, background: item.isFailed ? '#fee2e2' : '#ecfccb', cursor: 'pointer' }}>{item.isFailed ? 'Retry send' : 'Process send'}</button>
+                          </form>
+                        ) : null}
                       </div>
                     )) : <div style={{ color: '#6b7280' }}>No outbox items yet.</div>}
                   </div>

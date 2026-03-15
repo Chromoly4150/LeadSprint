@@ -1,78 +1,79 @@
 const crypto = require('crypto');
 
-const GMAIL_SCOPES = [
-  'https://www.googleapis.com/auth/gmail.send',
-  'https://www.googleapis.com/auth/gmail.readonly',
-  'https://www.googleapis.com/auth/userinfo.email',
+const MICROSOFT_SCOPES = [
+  'offline_access',
+  'openid',
+  'email',
+  'https://graph.microsoft.com/Mail.Send',
+  'https://graph.microsoft.com/Mail.Read',
 ].join(' ');
 
-function buildAuthUrl({ clientId, redirectUri, state }) {
-  const url = new URL('https://accounts.google.com/o/oauth2/v2/auth');
+function buildMicrosoftAuthUrl({ clientId, redirectUri, state }) {
+  const url = new URL('https://login.microsoftonline.com/common/oauth2/v2.0/authorize');
   url.searchParams.set('client_id', clientId);
   url.searchParams.set('redirect_uri', redirectUri);
   url.searchParams.set('response_type', 'code');
-  url.searchParams.set('access_type', 'offline');
-  url.searchParams.set('prompt', 'consent');
-  url.searchParams.set('scope', GMAIL_SCOPES);
-  url.searchParams.set('state', state || `gmail_${crypto.randomUUID()}`);
+  url.searchParams.set('response_mode', 'query');
+  url.searchParams.set('scope', MICROSOFT_SCOPES);
+  url.searchParams.set('state', state || `ms_${crypto.randomUUID()}`);
   return url.toString();
 }
 
-async function exchangeCodeForTokens({ clientId, clientSecret, redirectUri, code }) {
+async function exchangeMicrosoftCodeForTokens({ clientId, clientSecret, redirectUri, code }) {
   const body = new URLSearchParams({
-    code,
     client_id: clientId,
     client_secret: clientSecret,
     redirect_uri: redirectUri,
+    code,
     grant_type: 'authorization_code',
   });
 
-  const res = await fetch('https://oauth2.googleapis.com/token', {
+  const res = await fetch('https://login.microsoftonline.com/common/oauth2/v2.0/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body,
   });
 
   const json = await res.json();
-  if (!res.ok) throw new Error(json.error_description || json.error || 'Token exchange failed');
+  if (!res.ok) throw new Error(json.error_description || json.error || 'Microsoft token exchange failed');
   return json;
 }
 
-async function refreshAccessToken({ clientId, clientSecret, refreshToken }) {
+async function refreshMicrosoftAccessToken({ clientId, clientSecret, refreshToken }) {
   const body = new URLSearchParams({
     client_id: clientId,
     client_secret: clientSecret,
     refresh_token: refreshToken,
     grant_type: 'refresh_token',
+    scope: MICROSOFT_SCOPES,
   });
 
-  const res = await fetch('https://oauth2.googleapis.com/token', {
+  const res = await fetch('https://login.microsoftonline.com/common/oauth2/v2.0/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body,
   });
 
   const json = await res.json();
-  if (!res.ok) throw new Error(json.error_description || json.error || 'Token refresh failed');
+  if (!res.ok) throw new Error(json.error_description || json.error || 'Microsoft token refresh failed');
   return json;
 }
 
 
-async function ensureValidGmailAccessToken({ providerSettings, saveProviderSettings }) {
+async function ensureValidMicrosoftAccessToken({ providerSettings, saveProviderSettings }) {
   if (!providerSettings?.client_id || !providerSettings?.client_secret || !providerSettings?.refresh_token) {
-    throw new Error('Gmail provider is not fully configured');
+    throw new Error('Microsoft provider is not fully configured');
   }
 
   let accessToken = providerSettings.access_token || null;
   let expiresAt = providerSettings.token_expires_at ? new Date(providerSettings.token_expires_at).getTime() : 0;
 
   if (!accessToken || !expiresAt || expiresAt <= Date.now() + 60_000) {
-    const refreshed = await refreshAccessToken({
+    const refreshed = await refreshMicrosoftAccessToken({
       clientId: providerSettings.client_id,
       clientSecret: providerSettings.client_secret,
       refreshToken: providerSettings.refresh_token,
     });
-
     accessToken = refreshed.access_token;
     expiresAt = Date.now() + Number(refreshed.expires_in || 3600) * 1000;
     await saveProviderSettings({
@@ -86,20 +87,20 @@ async function ensureValidGmailAccessToken({ providerSettings, saveProviderSetti
   return accessToken;
 }
 
-async function fetchGoogleProfile(accessToken) {
-  const res = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+async function fetchMicrosoftProfile(accessToken) {
+  const res = await fetch('https://graph.microsoft.com/v1.0/me', {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   const json = await res.json();
-  if (!res.ok) throw new Error(json.error?.message || 'Failed to fetch Google profile');
+  if (!res.ok) throw new Error(json.error?.message || 'Failed to fetch Microsoft profile');
   return json;
 }
 
 module.exports = {
-  GMAIL_SCOPES,
-  buildAuthUrl,
-  exchangeCodeForTokens,
-  refreshAccessToken,
-  fetchGoogleProfile,
-  ensureValidGmailAccessToken,
+  MICROSOFT_SCOPES,
+  buildMicrosoftAuthUrl,
+  exchangeMicrosoftCodeForTokens,
+  refreshMicrosoftAccessToken,
+  fetchMicrosoftProfile,
+  ensureValidMicrosoftAccessToken,
 };

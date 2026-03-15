@@ -2,7 +2,8 @@
   "name": "leadsprint-worker",
   "private": true,
   "version": "0.1.0",
+  "type": "commonjs",
   "scripts": {
-    "start": "node src/index.js"
+    "sync-email": "node src/email-sync-runner.js"
   }
 }

@@ -1,6 +1,8 @@
 import { AppShell, cardStyle, inputStyle } from '../../../components/app-shell';
 import { WorkspaceBadge } from '../../../components/workspace-badge';
+import Link from 'next/link';
 import { internalApiFetch } from '../../../lib/api/internal-api';
+import { buildPrimaryNav } from '../../../lib/surfaces';
 import {
   approveAccessRequestAction,
   bootstrapGmailProviderAction,
@@ -14,10 +16,25 @@ import {
   revokeInvitationAction,
   startGmailOAuthAction,
   updateAiSettingsAction,
+  updateEmailPolicyAction,
+  createEmailAccountAction,
+  connectGmailEmailAccountAction,
+  setDefaultEmailAccountAction,
+  disconnectEmailAccountAction,
+  removeEmailAccountAction,
+  connectMicrosoftEmailAccountAction,
+  saveEmailAccountConfigAction,
+  verifyEmailAccountAction,
+  testSendEmailAccountAction,
+  syncEmailAccountAction,
+  updateEmailSyncModeAction,
 } from './actions';
 
 type UserRow = { id: string; fullName: string; email: string; role: string; roleLabel?: string; status?: string; permissionOverrides?: Record<string, boolean>; permissions?: Record<string, boolean> };
 type ProviderRow = { key: string; label: string; needsAuth: boolean; status: string; updatedAt: string | null };
+type EmailPolicy = { allow_user_mailboxes: number; default_send_mode: string; restrict_outbound_to_company_domains: number; allowed_user_mailbox_roles: string[]; updated_at?: string | null };
+type EmailSyncState = { sync_mode: string; last_synced_at?: string | null; last_status?: string | null; last_error?: string | null; last_cursor?: string | null };
+type EmailAccount = { id: string; scopeType: string; providerType: string; providerKey?: string | null; accountRole: string; emailAddress: string; displayName?: string | null; authMethod: string; status: string; capabilities: string[]; isDefaultForOrg?: boolean; isDefaultForUser?: boolean; lastSyncAt?: string | null; lastSendAt?: string | null; lastError?: string | null; ownerName?: string | null; ownerEmail?: string | null; isLegacyProviderSetting?: boolean; syncState?: EmailSyncState | null };
 type AccessRequestRow = {
   id: string;
   email: string;
@@ -48,12 +65,14 @@ type AiSettings = {
   response_sla_target_minutes: number;
   tone_profile: { defaultTone?: string };
   business_context: { businessName?: string; bookingLink?: string };
+  compliance_policy?: { requireHumanApprovalForOutbound?: boolean; autoGenerateFirstResponseOnLeadCreate?: boolean };
+  model_policy?: { primaryProvider?: string; primaryModel?: string; allowedModels?: string[] };
   usage_plan: string;
   monthly_message_limit: number;
   monthly_ai_token_budget: number;
   updated_at?: string | null;
 };
-type AiRun = { id: string; workflow_type: string; status: string; mode: string; provider?: string | null; model?: string | null; lead_id?: string | null; created_at: string; completed_at?: string | null };
+type AiRun = { id: string; workflow_type: string; status: string; mode: string; provider?: string | null; model?: string | null; lead_id?: string | null; created_at: string; completed_at?: string | null; error_message?: string | null };
 
 function statusBadge(status?: string) {
   const normalized = status || 'active';
@@ -73,25 +92,28 @@ function permissionSummary(user: UserRow) {
 }
 
 export default async function SettingsPage({ searchParams }: { searchParams?: { message?: string; error?: string; q?: string; roleScope?: string } }) {
-  const [usersRes, providersRes, meRes, requestsRes, aiSettingsRes, aiRunsRes] = await Promise.all([
+  const [usersRes, providersRes, meRes, requestsRes, aiSettingsRes, aiRunsRes, emailRes] = await Promise.all([
     internalApiFetch<{ users: UserRow[] }>('/api/users'),
     internalApiFetch<{ providers: ProviderRow[] }>('/api/email/provider-settings'),
     internalApiFetch<{ actor: { id: string; email: string; role: string; status: string; roleLabel?: string } }>('/api/me/permissions'),
     internalApiFetch<{ requests: AccessRequestRow[] }>('/api/admin/access-requests').catch(() => ({ requests: [] })),
-    internalApiFetch<{ settings: AiSettings; updatedAt?: string | null }>('/api/settings/ai').catch(() => ({ settings: { ai_enabled: 0, default_mode: 'draft_only', allowed_channels: ['email', 'sms'], allowed_actions: ['draft_message'], response_sla_target_minutes: 5, tone_profile: { defaultTone: 'professional and warm' }, business_context: { businessName: '', bookingLink: '' }, usage_plan: 'standard', monthly_message_limit: 250, monthly_ai_token_budget: 250000 } })),
+    internalApiFetch<{ settings: AiSettings; updatedAt?: string | null }>('/api/settings/ai').catch(() => ({ settings: { ai_enabled: 0, default_mode: 'draft_only', allowed_channels: ['email', 'sms'], allowed_actions: ['draft_message'], response_sla_target_minutes: 5, tone_profile: { defaultTone: 'professional and warm' }, business_context: { businessName: '', bookingLink: '' }, compliance_policy: { requireHumanApprovalForOutbound: true, autoGenerateFirstResponseOnLeadCreate: false }, model_policy: { primaryProvider: 'stub', primaryModel: 'stub/draft-v1', allowedModels: ['stub/draft-v1'] }, usage_plan: 'standard', monthly_message_limit: 250, monthly_ai_token_budget: 250000 } })),
     internalApiFetch<{ runs: AiRun[] }>('/api/ai/runs').catch(() => ({ runs: [] })),
+    internalApiFetch<{ policy: EmailPolicy; accounts: EmailAccount[]; syncRuns?: Array<{ id: string; email_account_id: string; provider_key: string; started_at: string; completed_at?: string | null; status: string; imported_count: number; skipped_count: number; checked_count: number; error?: string | null }> }>('/api/settings/email').catch(() => ({ policy: { allow_user_mailboxes: 0, default_send_mode: 'org_default', restrict_outbound_to_company_domains: 0, allowed_user_mailbox_roles: ['company_admin'] }, accounts: [], syncRuns: [] })),
   ]);
 
   let invitationsRes: { invitations: InvitationRow[] } | null = null;
   let orgIdForInvites: string | null = null;
   let workspaceType: string | null = null;
+  let workspaceSlug: string | null = null;
   const flashMessage = searchParams?.message ? decodeURIComponent(searchParams.message) : null;
   const flashError = searchParams?.error ? decodeURIComponent(searchParams.error) : null;
   const roleScope = searchParams?.roleScope === 'company' ? 'company' : 'platform';
   const requestQuery = (searchParams?.q || '').trim().toLowerCase();
   try {
-    const access = await internalApiFetch<{ state: string; workspace?: { id: string; workspaceType: string } }>('/api/access/me');
+    const access = await internalApiFetch<{ state: string; workspace?: { id: string; slug?: string; workspaceType: string } }>('/api/access/me');
     workspaceType = access.workspace?.workspaceType || null;
+    workspaceSlug = access.workspace?.slug || null;
     orgIdForInvites = access.workspace?.workspaceType === 'business_verified' ? access.workspace.id : null;
     if (orgIdForInvites) {
       invitationsRes = await internalApiFetch<{ invitations: InvitationRow[] }>(`/api/organizations/${orgIdForInvites}/invitations`).catch(() => ({ invitations: [] }));
@@ -145,8 +167,10 @@ export default async function SettingsPage({ searchParams }: { searchParams?: { 
     ] as const;
   };
 
+  const navItems = buildPrimaryNav({ role: meRes.actor.role, workspaceSlug: workspaceSlug || undefined });
+
   return (
-    <AppShell title="Settings" subtitle="Team, provider, onboarding review, and invite management">
+    <AppShell title="Settings" subtitle="Team, provider, onboarding review, and invite management" navItems={navItems}>
       <section style={{ ...cardStyle, marginBottom: 16 }}>
         <h2 style={{ marginTop: 0 }}>Current workspace</h2>
         <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -286,6 +310,191 @@ export default async function SettingsPage({ searchParams }: { searchParams?: { 
       </section>
 
       <section style={{ ...cardStyle, marginTop: 16 }}>
+        <h2 style={{ marginTop: 0, marginBottom: 4 }}>Email accounts & policy</h2>
+        <p style={{ marginTop: 0, color: '#6b7280' }}>Model shared organization mailboxes separately from optional user-level mailboxes so workspaces can centralize communications or selectively allow personal sending identities.</p>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
+          <div>
+            <h3 style={{ marginTop: 0 }}>Workspace email policy</h3>
+            <form action={updateEmailPolicyAction} style={{ display: 'grid', gap: 10 }}>
+              <label><input type="checkbox" name="allowUserMailboxes" defaultChecked={Boolean(emailRes.policy.allow_user_mailboxes)} /> Allow user-level/personal mailbox connections</label>
+              <label><input type="checkbox" name="restrictOutboundToCompanyDomains" defaultChecked={Boolean(emailRes.policy.restrict_outbound_to_company_domains)} /> Restrict outbound identities to company-controlled domains</label>
+              <label>Default send mode
+                <select name="defaultSendMode" defaultValue={emailRes.policy.default_send_mode} style={{ ...inputStyle, marginLeft: 8 }}>
+                  <option value="org_default">Organization default</option>
+                  <option value="user_optional">User optional</option>
+                  <option value="user_preferred">User preferred</option>
+                </select>
+              </label>
+              <fieldset style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 12 }}>
+                <legend>Roles allowed to connect personal mailboxes</legend>
+                <label><input type="checkbox" name="allowedUserMailboxRoles" value="company_owner" defaultChecked={emailRes.policy.allowed_user_mailbox_roles.includes('company_owner')} /> Company Owner</label>{' '}
+                <label><input type="checkbox" name="allowedUserMailboxRoles" value="company_admin" defaultChecked={emailRes.policy.allowed_user_mailbox_roles.includes('company_admin')} /> Company Admin</label>{' '}
+                <label><input type="checkbox" name="allowedUserMailboxRoles" value="company_agent" defaultChecked={emailRes.policy.allowed_user_mailbox_roles.includes('company_agent')} /> Company Agent</label>
+              </fieldset>
+              <div><button type="submit">Save email policy</button></div>
+            </form>
+          </div>
+          <div>
+            <h3 style={{ marginTop: 0 }}>Add email account</h3>
+            <form action={createEmailAccountAction} style={{ display: 'grid', gap: 8 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                <select name="scopeType" style={inputStyle} defaultValue="organization">
+                  <option value="organization">Organization mailbox</option>
+                  <option value="user">User mailbox</option>
+                </select>
+                <select name="providerType" style={inputStyle} defaultValue="google">
+                  <option value="google">Google / Gmail</option>
+                  <option value="microsoft">Microsoft 365 / Outlook</option>
+                  <option value="imap_smtp">Other mailbox (IMAP/SMTP)</option>
+                  <option value="smtp_only">SMTP only</option>
+                  <option value="stub">Stub / placeholder</option>
+                </select>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                <input name="emailAddress" style={inputStyle} placeholder="mailbox@company.com" />
+                <input name="displayName" style={inputStyle} placeholder="Display name" />
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                <select name="accountRole" style={inputStyle} defaultValue="inbox_and_send">
+                  <option value="inbox_and_send">Inbox + send</option>
+                  <option value="send_only">Send only</option>
+                  <option value="inbox_only">Inbox only</option>
+                </select>
+                <select name="authMethod" style={inputStyle} defaultValue="oauth">
+                  <option value="oauth">OAuth</option>
+                  <option value="credentials">Credentials</option>
+                  <option value="app_password">App password</option>
+                  <option value="token">Token</option>
+                  <option value="none">None</option>
+                </select>
+              </div>
+              <input name="providerKey" style={inputStyle} placeholder="Provider key (optional, e.g. gmail)" />
+              <input name="signature" style={inputStyle} placeholder="Signature (optional)" />
+              <fieldset style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 12 }}>
+                <legend>Capabilities</legend>
+                <label><input type="checkbox" name="capabilities" value="send" defaultChecked /> Send</label>{' '}
+                <label><input type="checkbox" name="capabilities" value="receive" /> Receive</label>{' '}
+                <label><input type="checkbox" name="capabilities" value="sync_threads" /> Sync threads</label>
+              </fieldset>
+              <label><input type="checkbox" name="isDefaultForOrg" /> Make default organization sender</label>
+              <label><input type="checkbox" name="isDefaultForUser" /> Make default personal sender</label>
+              <div><button type="submit">Add email account</button></div>
+            </form>
+          </div>
+        </div>
+        <div style={{ display: 'grid', gap: 10, marginBottom: 16 }}>
+          <h3 style={{ margin: 0 }}>Configured email accounts</h3>
+          {emailRes.accounts.length === 0 ? <p style={{ margin: 0, color: '#6b7280' }}>No modeled email accounts yet. Legacy provider settings can coexist while the new account model rolls out.</p> : emailRes.accounts.map((account) => (
+            <div key={account.id} style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 12, display: 'grid', gap: 6 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+                <div style={{ fontWeight: 700 }}>{account.emailAddress}</div>
+                <div style={{ color: '#6b7280', fontSize: 12 }}>{account.status}</div>
+              </div>
+              <div style={{ color: '#6b7280', fontSize: 13 }}>{account.scopeType} · {account.providerType}{account.providerKey ? ` / ${account.providerKey}` : ''} · {account.accountRole}</div>
+              <div style={{ color: '#6b7280', fontSize: 12 }}>Readiness: {account.status === 'connected' ? 'ready' : account.status === 'needs_reauth' ? 'needs reauth' : account.status === 'degraded' ? 'config incomplete / degraded' : 'not connected'}</div>
+              <div style={{ color: '#6b7280', fontSize: 12 }}>Capabilities: {account.capabilities.join(', ') || '—'}</div>
+              <div style={{ color: '#6b7280', fontSize: 12 }}>Sync mode: {account.syncState?.sync_mode || 'manual'}{account.syncState?.last_status ? ` · last status: ${account.syncState.last_status}` : ''}{account.syncState?.last_synced_at ? ` · last synced: ${account.syncState.last_synced_at}` : ''}</div>
+              <div style={{ color: '#6b7280', fontSize: 12 }}>Owner: {account.ownerName || account.ownerEmail || 'workspace'}{account.isDefaultForOrg ? ' · default org sender' : ''}{account.isDefaultForUser ? ' · default personal sender' : ''}</div>
+              {account.lastError ? <div style={{ color: '#991b1b', fontSize: 12 }}>{account.lastError}</div> : null}
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <form action={setDefaultEmailAccountAction}>
+                  <input type="hidden" name="accountId" value={account.id} />
+                  <button type="submit">Make default</button>
+                </form>
+                <form action={verifyEmailAccountAction}>
+                  <input type="hidden" name="accountId" value={account.id} />
+                  <button type="submit">Verify</button>
+                </form>
+                {account.providerType === 'google' ? (
+                  <>
+                    <form action={connectGmailEmailAccountAction}>
+                      <input type="hidden" name="accountId" value={account.id} />
+                      <button type="submit">{account.status === 'connected' ? 'Reconnect Gmail' : 'Connect Gmail OAuth'}</button>
+                    </form>
+                    <form action={syncEmailAccountAction}>
+                      <input type="hidden" name="accountId" value={account.id} />
+                      <button type="submit">Sync Gmail inbox</button>
+                    </form>
+                  </>
+                ) : null}
+                {account.providerType === 'microsoft' ? (
+                  <>
+                    <form action={connectMicrosoftEmailAccountAction}>
+                      <input type="hidden" name="accountId" value={account.id} />
+                      <button type="submit">{account.status === 'connected' ? 'Reconnect Microsoft' : 'Connect Microsoft OAuth'}</button>
+                    </form>
+                    <form action={syncEmailAccountAction}>
+                      <input type="hidden" name="accountId" value={account.id} />
+                      <button type="submit">Sync Microsoft inbox</button>
+                    </form>
+                  </>
+                ) : null}
+                <form action={disconnectEmailAccountAction}>
+                  <input type="hidden" name="accountId" value={account.id} />
+                  <button type="submit">Disconnect</button>
+                </form>
+                <form action={removeEmailAccountAction}>
+                  <input type="hidden" name="accountId" value={account.id} />
+                  <button type="submit">Remove</button>
+                </form>
+              </div>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                <form action={testSendEmailAccountAction} style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <input type="hidden" name="accountId" value={account.id} />
+                  <input name="toEmail" style={inputStyle} placeholder="Send test email to (optional)" />
+                  <button type="submit">Send test email</button>
+                </form>
+                {(account.providerType === 'google' || account.providerType === 'microsoft') ? (
+                  <form action={updateEmailSyncModeAction} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <input type="hidden" name="accountId" value={account.id} />
+                    <select name="syncMode" defaultValue={account.syncState?.sync_mode || 'manual'} style={inputStyle}>
+                      <option value="manual">Manual sync</option>
+                      <option value="background">Background sync</option>
+                    </select>
+                    <button type="submit">Save sync mode</button>
+                  </form>
+                ) : null}
+              </div>
+              {(account.providerType === 'imap_smtp' || account.providerType === 'smtp_only') ? (
+                <form action={saveEmailAccountConfigAction} style={{ display: 'grid', gap: 8, marginTop: 4 }}>
+                  <input type="hidden" name="accountId" value={account.id} />
+                  <input type="hidden" name="providerKey" value="imap_smtp" />
+                  <input type="hidden" name="status" value="connected" />
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 120px 1fr 120px', gap: 8 }}>
+                    <input name="smtpHost" style={inputStyle} placeholder="SMTP host" defaultValue="" />
+                    <input name="smtpPort" type="number" style={inputStyle} placeholder="587" defaultValue={587} />
+                    <input name="imapHost" style={inputStyle} placeholder="IMAP host" defaultValue="" />
+                    <input name="imapPort" type="number" style={inputStyle} placeholder="993" defaultValue={993} />
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                    <input name="smtpUsername" style={inputStyle} placeholder="SMTP username" defaultValue="" />
+                    <input name="smtpPassword" type="password" style={inputStyle} placeholder="SMTP password / app password" defaultValue="" />
+                  </div>
+                  <label><input type="checkbox" name="smtpSecure" /> Use secure SMTP (usually port 465)</label>
+                  <div><button type="submit">Save IMAP/SMTP config</button></div>
+                </form>
+              ) : null}
+              {account.isLegacyProviderSetting ? <div style={{ color: '#92400e', fontSize: 12 }}>Legacy provider configuration detected; migrate into the new account model later.</div> : null}
+            </div>
+          ))}
+        </div>
+
+        {emailRes.syncRuns?.length ? (
+          <div style={{ display: 'grid', gap: 8, marginTop: 16 }}>
+            <h3 style={{ margin: 0 }}>Recent sync runs</h3>
+            {emailRes.syncRuns.slice(0, 8).map((run) => (
+              <div key={run.id} style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 10 }}>
+                <div style={{ fontWeight: 700 }}>{run.provider_key} · {run.status}</div>
+                <div style={{ color: '#6b7280', fontSize: 12 }}>Started {run.started_at}{run.completed_at ? ` · Completed ${run.completed_at}` : ''}</div>
+                <div style={{ color: '#6b7280', fontSize: 12 }}>Checked {run.checked_count} · Imported {run.imported_count} · Skipped {run.skipped_count}</div>
+                {run.error ? <div style={{ color: '#991b1b', fontSize: 12 }}>{run.error}</div> : null}
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </section>
+
+      <section style={{ ...cardStyle, marginTop: 16 }}>
         <h2 style={{ marginTop: 0, marginBottom: 4 }}>AI control plane</h2>
         <p style={{ marginTop: 0, color: '#6b7280' }}>Configure org-level AI behavior, allowed workflows, and review recent AI runs before exposing AI deeper in the product.</p>
         <form action={updateAiSettingsAction} style={{ display: 'grid', gap: 12, marginBottom: 16 }}>
@@ -339,6 +548,18 @@ export default async function SettingsPage({ searchParams }: { searchParams?: { 
               <input name="bookingLink" defaultValue={aiSettingsRes.settings.business_context?.bookingLink || ''} style={{ ...inputStyle, marginLeft: 8, minWidth: 260 }} />
             </label>
           </div>
+          <label><input type="checkbox" name="autoGenerateFirstResponseOnLeadCreate" defaultChecked={Boolean(aiSettingsRes.settings.compliance_policy?.autoGenerateFirstResponseOnLeadCreate)} /> Auto-generate first response when a new lead arrives</label>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            <label>Primary provider
+              <select name="primaryProvider" defaultValue={aiSettingsRes.settings.model_policy?.primaryProvider || 'stub'} style={{ ...inputStyle, marginLeft: 8 }}>
+                <option value="stub">Stub</option>
+                <option value="openai">OpenAI-compatible</option>
+              </select>
+            </label>
+            <label>Primary model
+              <input name="primaryModel" defaultValue={aiSettingsRes.settings.model_policy?.primaryModel || 'stub/draft-v1'} style={{ ...inputStyle, marginLeft: 8, minWidth: 220 }} />
+            </label>
+          </div>
           <div>
             <button type="submit">Save AI settings</button>
           </div>
@@ -346,10 +567,14 @@ export default async function SettingsPage({ searchParams }: { searchParams?: { 
         <div style={{ display: 'grid', gap: 10, marginBottom: 16 }}>
           <h3 style={{ margin: 0 }}>Recent AI runs</h3>
           {aiRunsRes.runs.length === 0 ? <p style={{ margin: 0, color: '#6b7280' }}>No AI runs yet.</p> : aiRunsRes.runs.slice(0, 8).map((run) => (
-            <div key={run.id} style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 12, display: 'grid', gap: 4 }}>
-              <div style={{ fontWeight: 700 }}>{run.workflow_type}</div>
+            <div key={run.id} style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 12, display: 'grid', gap: 6 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+                <div style={{ fontWeight: 700 }}>{run.workflow_type}</div>
+                <Link href={`/settings/ai-runs/${run.id}`}>View run detail</Link>
+              </div>
               <div style={{ color: '#6b7280', fontSize: 12, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>{statusBadge(run.status)}<span>{run.mode}</span><span>{run.provider || 'stub'}</span><span>{run.model || 'draft-v1'}</span></div>
               <div style={{ color: '#6b7280', fontSize: 12 }}>Lead: {run.lead_id || '—'} · Created: {run.created_at}</div>
+              {run.error_message ? <div style={{ color: '#991b1b', fontSize: 12 }}>{run.error_message}</div> : null}
             </div>
           ))}
         </div>

@@ -1,6 +1,8 @@
 import Link from 'next/link';
 
-const nav = [
+type NavItem = { href: string; label: string };
+
+const defaultNav: NavItem[] = [
   { href: '/dashboard', label: 'Dashboard' },
   { href: '/leads', label: 'Leads' },
   { href: '/inbox', label: 'Inbox' },
@@ -9,7 +11,7 @@ const nav = [
   { href: '/onboarding', label: 'Onboarding' },
 ];
 
-export function AppShell({ title, subtitle, children, showNav = true }: { title: string; subtitle?: string; children: React.ReactNode; showNav?: boolean }) {
+export function AppShell({ title, subtitle, children, showNav = true, navItems = defaultNav }: { title: string; subtitle?: string; children: React.ReactNode; showNav?: boolean; navItems?: NavItem[] }) {
   return (
     <main style={{ minHeight: '100vh', background: '#f6f7fb', padding: 24 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 24, marginBottom: 20 }}>
@@ -20,7 +22,7 @@ export function AppShell({ title, subtitle, children, showNav = true }: { title:
         </div>
         {showNav ? (
           <nav style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            {nav.map((item) => (
+            {navItems.map((item) => (
               <Link key={item.href} href={item.href} style={{ padding: '8px 12px', borderRadius: 10, textDecoration: 'none', background: '#e5e7eb', color: '#111827', fontWeight: 600 }}>
                 {item.label}
               </Link>

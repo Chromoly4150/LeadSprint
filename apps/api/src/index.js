@@ -4,8 +4,12 @@ const fs = require('fs');
 const path = require('path');
 const { ensureDb, runMigrations, nowIso } = require('./db');
 const { getProvider, PROVIDERS } = require('./email');
-const { buildAuthUrl, exchangeCodeForTokens, fetchGoogleProfile } = require('./gmail-oauth');
+const { buildAuthUrl, exchangeCodeForTokens, fetchGoogleProfile, ensureValidGmailAccessToken } = require('./gmail-oauth');
+const { buildMicrosoftAuthUrl, exchangeMicrosoftCodeForTokens, fetchMicrosoftProfile, ensureValidMicrosoftAccessToken } = require('./microsoft-oauth');
 const { runDraftOnlyLeadResponse } = require('./ai');
+const { createProviderDispatcher } = require('../../../packages/email-sync/providerDispatcher');
+const { createRunAccountSyncRuntime } = require('../../../packages/email-sync/runAccountSync');
+const { createSyncRunner } = require('../../../packages/email-sync/syncRunner');
 
 runMigrations();
 const db = ensureDb();
@@ -169,11 +173,14 @@ const ROLE_DEFAULT_PERMISSIONS = {
   },
 };
 
-db.prepare(`INSERT OR IGNORE INTO organizations (id, name, timezone) VALUES (?, ?, ?)`).run(
+db.prepare(`INSERT OR IGNORE INTO organizations (id, name, timezone, slug) VALUES (?, ?, ?, ?)`).run(
   DEFAULT_ORG_ID,
   DEFAULT_ORG_NAME,
-  'America/New_York'
+  'America/New_York',
+  'default-organization'
 );
+
+db.prepare(`UPDATE organizations SET slug = COALESCE(NULLIF(slug, ''), ?) WHERE id = ?`).run('default-organization', DEFAULT_ORG_ID);
 
 const defaultTemplateBody =
   'Hey {{name}} — thanks for reaching out to {{business_name}}. We got your request and can help. You can book here: {{booking_link}}';
@@ -305,6 +312,216 @@ function safeJsonParse(value, fallback) {
   }
 }
 
+
+function slugifyWorkspaceName(value, fallback = 'workspace') {
+  const slug = normalizeString(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .replace(/-{2,}/g, '-');
+  return slug || fallback;
+}
+
+function ensureUniqueWorkspaceSlug(baseSlug, excludeOrgId = null) {
+  const seed = slugifyWorkspaceName(baseSlug);
+  let attempt = seed;
+  let index = 2;
+  while (true) {
+    const existing = excludeOrgId
+      ? db.prepare(`SELECT id FROM organizations WHERE slug = ? AND id != ? LIMIT 1`).get(attempt, excludeOrgId)
+      : db.prepare(`SELECT id FROM organizations WHERE slug = ? LIMIT 1`).get(attempt);
+    if (!existing) return attempt;
+    attempt = `${seed}-${index}`;
+    index += 1;
+  }
+}
+
+function serializeWorkspaceRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    name: row.name,
+    slug: row.slug || ensureUniqueWorkspaceSlug(row.name || row.id, row.id),
+    workspaceType: row.workspace_type || 'business_verified',
+    timezone: row.timezone || 'America/New_York',
+  };
+}
+
+function getSurfaceForRole(role) {
+  return PLATFORM_ROLES.has(role) ? 'control' : 'workspace';
+}
+
+
+function extractEmailParticipants(headers = []) {
+  const pairs = [];
+  for (const header of headers) {
+    const name = String(header.name || '').toLowerCase();
+    if (!['from', 'to', 'cc', 'bcc', 'reply-to'].includes(name)) continue;
+    pairs.push({ name, value: header.value || '' });
+  }
+  return pairs;
+}
+
+function extractEmails(values = []) {
+  return values
+    .flatMap((value) => String(value || '').split(/[;,]/))
+    .map((part) => {
+      const match = part.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+      return match ? match[0].toLowerCase() : null;
+    })
+    .filter(Boolean);
+}
+
+function findLeadByEmail(orgId, emails = []) {
+  const normalized = extractEmails(emails);
+  for (const email of normalized) {
+    const lead = db.prepare(`SELECT * FROM leads WHERE organization_id = ? AND lower(email) = ? LIMIT 1`).get(orgId, email);
+    if (lead) return lead;
+  }
+  return null;
+}
+
+function filterExternalEmails(emails = [], accountEmail = null) {
+  const own = String(accountEmail || '').toLowerCase();
+  return extractEmails(emails).filter((email) => email && email !== own);
+}
+
+function cleanMessageSnippet(value) {
+  return String(value || '')
+    .replace(/\s+/g, ' ')
+    .replace(/ /g, ' ')
+    .trim()
+    .slice(0, 280);
+}
+
+async function syncGmailInboundForAccount({ orgId, account, actorName = 'System' }) {
+  const providerSettings = getProviderSettings(orgId, 'gmail');
+  if (!providerSettings) throw new Error('Gmail provider settings are missing');
+  const accessToken = await ensureValidGmailAccessToken({
+    providerSettings,
+    saveProviderSettings: (patch) => saveProviderSettingsRow(orgId, 'gmail', patch),
+  });
+  const syncState = getEmailSyncState(account.id);
+  const query = syncState?.last_synced_at ? `after:${Math.floor(new Date(syncState.last_synced_at).getTime() / 1000)}` : 'newer_than:14d';
+  upsertEmailSyncState({ organizationId: orgId, emailAccountId: account.id, providerKey: 'gmail', syncMode: syncState?.sync_mode || 'manual', lastCursor: syncState?.last_cursor || null, lastSyncedAt: syncState?.last_synced_at || null, lastStatus: 'running', lastError: null });
+  const listRes = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=10&q=${encodeURIComponent(query)}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const listJson = await listRes.json();
+  if (!listRes.ok) throw new Error(listJson.error?.message || 'Failed to list Gmail messages');
+  const messages = Array.isArray(listJson.messages) ? listJson.messages : [];
+  const imported = [];
+  const skipped = [];
+
+  for (const messageRef of messages) {
+    const existing = db.prepare(`SELECT id FROM communications WHERE organization_id = ? AND provider_key = 'gmail' AND provider_message_id = ? LIMIT 1`).get(orgId, messageRef.id);
+    if (existing) { skipped.push({ messageId: messageRef.id, reason: 'already_imported' }); continue; }
+
+    const msgRes = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${messageRef.id}?format=full`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    const msgJson = await msgRes.json();
+    if (!msgRes.ok) { skipped.push({ messageId: messageRef.id, reason: msgJson.error?.message || 'fetch_failed' }); continue; }
+
+    const headers = msgJson.payload?.headers || [];
+    const bodyData = msgJson.payload?.body?.data || msgJson.payload?.parts?.find((part) => part.mimeType === 'text/plain')?.body?.data || null;
+    const subject = headers.find((h) => String(h.name).toLowerCase() === 'subject')?.value || '(no subject)';
+    const fromValue = headers.find((h) => String(h.name).toLowerCase() === 'from')?.value || '';
+    const toValue = headers.find((h) => String(h.name).toLowerCase() === 'to')?.value || '';
+    const ccValue = headers.find((h) => String(h.name).toLowerCase() === 'cc')?.value || '';
+    const lead = findLeadByEmail(orgId, [fromValue, toValue, ccValue]);
+    if (!lead) { skipped.push({ messageId: messageRef.id, reason: 'no_matching_lead' }); continue; }
+
+    const actorType = filterExternalEmails([fromValue], account.email_address).length === 0 ? 'user' : 'lead';
+    const actorLabel = actorType === 'user' ? (account.display_name || account.email_address || actorName) : (fromValue || 'Lead');
+    const decodedBody = bodyData ? Buffer.from(String(bodyData).replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8') : '';
+    const content = cleanMessageSnippet(decodedBody || msgJson.snippet || subject);
+    const occurredAt = msgJson.internalDate ? new Date(Number(msgJson.internalDate)).toISOString() : nowIso();
+    const threadExisting = db.prepare(`SELECT id FROM communications WHERE organization_id = ? AND lead_id = ? AND provider_key = 'gmail' AND provider_thread_id = ? AND subject = ? LIMIT 1`).get(orgId, lead.id, msgJson.threadId || '', subject);
+    if (threadExisting) { skipped.push({ messageId: msgJson.id, reason: 'thread_duplicate' }); continue; }
+
+    const communicationId = `com_${crypto.randomUUID()}`;
+    const eventId = `evt_${crypto.randomUUID()}`;
+    db.prepare(`INSERT INTO communications (id, organization_id, lead_id, channel, direction, actor_type, actor_name, subject, summary, content, occurred_at, created_at, updated_at, provider_key, provider_thread_id, provider_message_id, external_participants_json) VALUES (?, ?, ?, 'email', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'gmail', ?, ?, ?)`).run(
+      communicationId,
+      orgId,
+      lead.id,
+      actorType === 'user' ? 'outbound' : 'inbound',
+      actorType,
+      actorLabel,
+      subject,
+      subject,
+      content,
+      occurredAt,
+      occurredAt,
+      occurredAt,
+      msgJson.threadId || null,
+      msgJson.id,
+      JSON.stringify(extractEmailParticipants(headers)),
+    );
+    db.prepare(`INSERT INTO events (id, organization_id, lead_id, event_type, payload_json, created_at) VALUES (?, ?, ?, 'lead.email_synced', ?, ?)`).run(eventId, orgId, lead.id, JSON.stringify({ provider: 'gmail', providerMessageId: msgJson.id, providerThreadId: msgJson.threadId || null, accountId: account.id }), occurredAt);
+    imported.push({ leadId: lead.id, messageId: msgJson.id, threadId: msgJson.threadId || null, subject });
+  }
+
+  const syncedAt = nowIso();
+  updateEmailAccount(account.id, orgId, { lastSyncAt: syncedAt, lastError: null, status: 'connected' });
+  upsertEmailSyncState({ organizationId: orgId, emailAccountId: account.id, providerKey: 'gmail', syncMode: syncState?.sync_mode || 'manual', lastCursor: messages[0]?.id || syncState?.last_cursor || null, lastSyncedAt: syncedAt, lastStatus: 'ok', lastError: null });
+  return { imported, skipped, checked: messages.length, syncedAt };
+}
+
+async function syncMicrosoftInboundForAccount({ orgId, account, actorName = 'System' }) {
+  const providerSettings = getProviderSettings(orgId, 'microsoft');
+  if (!providerSettings) throw new Error('Microsoft provider settings are missing');
+  const accessToken = await ensureValidMicrosoftAccessToken({
+    providerSettings,
+    saveProviderSettings: (patch) => saveProviderSettingsRow(orgId, 'microsoft', patch),
+  });
+
+  const syncState = getEmailSyncState(account.id);
+  upsertEmailSyncState({ organizationId: orgId, emailAccountId: account.id, providerKey: 'microsoft', syncMode: syncState?.sync_mode || 'manual', lastCursor: syncState?.last_cursor || null, lastSyncedAt: syncState?.last_synced_at || null, lastStatus: 'running', lastError: null });
+  const listRes = await fetch("https://graph.microsoft.com/v1.0/me/messages?$top=10&$select=id,conversationId,subject,from,toRecipients,ccRecipients,receivedDateTime,bodyPreview", {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const listJson = await listRes.json();
+  if (!listRes.ok) throw new Error(listJson.error?.message || 'Failed to list Microsoft messages');
+  const messages = Array.isArray(listJson.value) ? listJson.value : [];
+  const imported = [];
+  const skipped = [];
+
+  for (const msg of messages) {
+    const existing = db.prepare(`SELECT id FROM communications WHERE organization_id = ? AND provider_key = 'microsoft' AND provider_message_id = ? LIMIT 1`).get(orgId, msg.id);
+    if (existing) { skipped.push({ messageId: msg.id, reason: 'already_imported' }); continue; }
+
+    const fromValue = msg.from?.emailAddress?.address || '';
+    const toValue = Array.isArray(msg.toRecipients) ? msg.toRecipients.map((r) => r.emailAddress?.address).filter(Boolean).join(', ') : '';
+    const ccValue = Array.isArray(msg.ccRecipients) ? msg.ccRecipients.map((r) => r.emailAddress?.address).filter(Boolean).join(', ') : '';
+    const lead = findLeadByEmail(orgId, [fromValue, toValue, ccValue]);
+    if (!lead) { skipped.push({ messageId: msg.id, reason: 'no_matching_lead' }); continue; }
+
+    const actorType = filterExternalEmails([fromValue], account.email_address).length === 0 ? 'user' : 'lead';
+    const actorLabel = actorType === 'user' ? (account.display_name || account.email_address || actorName) : (fromValue || 'Lead');
+    const occurredAt = msg.receivedDateTime || nowIso();
+    const participants = [
+      { name: 'from', value: fromValue },
+      { name: 'to', value: toValue },
+      { name: 'cc', value: ccValue },
+    ].filter((item) => item.value);
+
+    const communicationId = `com_${crypto.randomUUID()}`;
+    const eventId = `evt_${crypto.randomUUID()}`;
+    db.prepare(`INSERT INTO communications (id, organization_id, lead_id, channel, direction, actor_type, actor_name, subject, summary, content, occurred_at, created_at, updated_at, provider_key, provider_thread_id, provider_message_id, external_participants_json) VALUES (?, ?, ?, 'email', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'microsoft', ?, ?, ?)`).run(
+      communicationId, orgId, lead.id, actorType === 'user' ? 'outbound' : 'inbound', actorType, actorLabel, msg.subject || '(no subject)', msg.subject || '(no subject)', cleanMessageSnippet(msg.bodyPreview || msg.subject || '(no preview)'), occurredAt, occurredAt, occurredAt, msg.conversationId || null, msg.id, JSON.stringify(participants)
+    );
+    db.prepare(`INSERT INTO events (id, organization_id, lead_id, event_type, payload_json, created_at) VALUES (?, ?, ?, 'lead.email_synced', ?, ?)`).run(eventId, orgId, lead.id, JSON.stringify({ provider: 'microsoft', providerMessageId: msg.id, providerThreadId: msg.conversationId || null, accountId: account.id }), occurredAt);
+    imported.push({ leadId: lead.id, messageId: msg.id, threadId: msg.conversationId || null, subject: msg.subject || '(no subject)' });
+  }
+
+  const syncedAt = nowIso();
+  updateEmailAccount(account.id, orgId, { lastSyncAt: syncedAt, lastError: null, status: 'connected' });
+  upsertEmailSyncState({ organizationId: orgId, emailAccountId: account.id, providerKey: 'gmail', syncMode: syncState?.sync_mode || 'manual', lastCursor: messages[0]?.id || syncState?.last_cursor || null, lastSyncedAt: syncedAt, lastStatus: 'ok', lastError: null });
+  return { imported, skipped, checked: messages.length, syncedAt };
+}
+
 function getAiSettingsForOrg(orgId) {
   const row = db.prepare(`SELECT * FROM organization_ai_settings WHERE organization_id = ? LIMIT 1`).get(orgId);
   if (!row) return null;
@@ -317,6 +534,35 @@ function getAiSettingsForOrg(orgId) {
     compliance_policy: safeJsonParse(row.compliance_policy_json, {}),
     model_policy: safeJsonParse(row.model_policy_json, {}),
   };
+}
+
+async function generateLeadDraftForLead({ orgId, leadId, triggerType = 'manual', triggerId = null }) {
+  const lead = db.prepare(`SELECT * FROM leads WHERE organization_id = ? AND id = ? LIMIT 1`).get(orgId, leadId);
+  if (!lead) throw new Error('Lead not found');
+  const org = db.prepare(`SELECT * FROM organizations WHERE id = ? LIMIT 1`).get(orgId);
+  const settings = getAiSettingsForOrg(orgId);
+  if (!settings) throw new Error('AI settings not found');
+  if (!settings.ai_enabled) throw new Error('AI is disabled for this organization');
+  if (!settings.allowed_actions.includes('draft_message')) throw new Error('Draft generation is not allowed for this organization');
+
+  const runId = `air_${crypto.randomUUID()}`;
+  const outputId = `airo_${crypto.randomUUID()}`;
+  const ts = nowIso();
+  db.prepare(`INSERT INTO ai_runs (id, organization_id, workflow_type, trigger_type, trigger_id, lead_id, status, mode, started_at, created_at, updated_at) VALUES (?, ?, 'lead_reply_draft', ?, ?, ?, 'pending', ?, ?, ?, ?)`).run(runId, orgId, triggerType, triggerId || leadId, lead.id, settings.default_mode, ts, ts, ts);
+
+  try {
+    const result = await runDraftOnlyLeadResponse({ org, lead, settings });
+    const draftId = `edr_${crypto.randomUUID()}`;
+    const completedAt = nowIso();
+    db.prepare(`UPDATE ai_runs SET status = 'completed', provider = ?, model = ?, input_tokens = ?, output_tokens = ?, estimated_cost = ?, completed_at = ?, updated_at = ? WHERE id = ?`).run(result.provider, result.model, result.inputTokens, result.outputTokens, result.estimatedCost, completedAt, completedAt, runId);
+    db.prepare(`INSERT INTO ai_run_outputs (id, ai_run_id, output_type, content_json, created_at) VALUES (?, ?, 'draft_message', ?, ?)`).run(outputId, runId, JSON.stringify(result.output), completedAt);
+    db.prepare(`INSERT INTO email_drafts (id, organization_id, lead_id, to_email, subject, body, status, source, created_by_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'draft', ?, NULL, ?, ?)`).run(draftId, orgId, lead.id, lead.email || 'unknown@example.com', result.output.subject, result.output.draft, triggerType === 'auto' ? 'ai_auto' : 'ai_generated', completedAt, completedAt);
+    return { runId, draftId, draft: result.output, triggerType };
+  } catch (error) {
+    const failedAt = nowIso();
+    db.prepare(`UPDATE ai_runs SET status = 'failed', error_code = ?, error_message = ?, completed_at = ?, updated_at = ? WHERE id = ?`).run('draft_failed', error?.message || 'AI draft failed', failedAt, failedAt, runId);
+    throw error;
+  }
 }
 
 function validateLead(payload) {
@@ -419,6 +665,31 @@ function serializeUser(row) {
 
 function renderTemplate(body, vars = {}) {
   return body.replace(/{{\s*([a-zA-Z0-9_]+)\s*}}/g, (_m, k) => vars[k] ?? `{{${k}}}`);
+}
+
+
+function serializeOutboxItem(row) {
+  return {
+    id: row.id,
+    emailDraftId: row.email_draft_id || null,
+    toEmail: row.to_email,
+    subject: row.subject,
+    body: row.body,
+    providerKey: row.provider_key || 'stub',
+    sendStatus: row.send_status,
+    queuedAt: row.queued_at,
+    sentAt: row.sent_at || null,
+    failedAt: row.failed_at || null,
+    lastError: row.last_error || null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    createdByName: row.created_by_name || row.created_by_user_id || 'System',
+    lastAttemptAt: row.failed_at || row.sent_at || row.updated_at || row.queued_at,
+    canProcess: row.send_status !== 'sent',
+    isFailed: row.send_status === 'failed',
+    isQueued: row.send_status === 'queued',
+    isSent: row.send_status === 'sent',
+  };
 }
 
 function getInternalSignaturePayload(req, clerkUserId, email, timestamp) {
@@ -563,6 +834,238 @@ function saveProviderSettingsRow(orgId, providerKey, patch = {}) {
   return getProviderSettings(orgId, providerKey);
 }
 
+
+function getEmailPolicyForOrg(orgId) {
+  const row = db.prepare(`SELECT * FROM organization_email_policies WHERE organization_id = ? LIMIT 1`).get(orgId);
+  if (!row) {
+    return {
+      organization_id: orgId,
+      allow_user_mailboxes: 0,
+      default_send_mode: 'org_default',
+      restrict_outbound_to_company_domains: 0,
+      allowed_user_mailbox_roles: ['company_admin'],
+      updated_at: null,
+    };
+  }
+  return {
+    ...row,
+    allowed_user_mailbox_roles: safeJsonParse(row.allowed_user_mailbox_roles_json, ['company_admin']),
+  };
+}
+
+function saveEmailPolicyForOrg(orgId, incoming = {}) {
+  const current = getEmailPolicyForOrg(orgId);
+  const ts = nowIso();
+  const next = {
+    allow_user_mailboxes: incoming.allowUserMailboxes ? 1 : 0,
+    default_send_mode: ['org_default', 'user_optional', 'user_preferred'].includes(incoming.defaultSendMode) ? incoming.defaultSendMode : (current.default_send_mode || 'org_default'),
+    restrict_outbound_to_company_domains: incoming.restrictOutboundToCompanyDomains ? 1 : 0,
+    allowed_user_mailbox_roles_json: JSON.stringify(Array.isArray(incoming.allowedUserMailboxRoles) && incoming.allowedUserMailboxRoles.length ? incoming.allowedUserMailboxRoles : (current.allowed_user_mailbox_roles || ['company_admin'])),
+  };
+  const existing = db.prepare(`SELECT * FROM organization_email_policies WHERE organization_id = ? LIMIT 1`).get(orgId);
+  if (existing) {
+    db.prepare(`UPDATE organization_email_policies SET allow_user_mailboxes = ?, default_send_mode = ?, restrict_outbound_to_company_domains = ?, allowed_user_mailbox_roles_json = ?, updated_at = ? WHERE organization_id = ?`).run(next.allow_user_mailboxes, next.default_send_mode, next.restrict_outbound_to_company_domains, next.allowed_user_mailbox_roles_json, ts, orgId);
+  } else {
+    db.prepare(`INSERT INTO organization_email_policies (id, organization_id, allow_user_mailboxes, default_send_mode, restrict_outbound_to_company_domains, allowed_user_mailbox_roles_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(`epl_${crypto.randomUUID()}`, orgId, next.allow_user_mailboxes, next.default_send_mode, next.restrict_outbound_to_company_domains, next.allowed_user_mailbox_roles_json, ts, ts);
+  }
+  return getEmailPolicyForOrg(orgId);
+}
+
+function serializeEmailAccount(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    organizationId: row.organization_id,
+    userId: row.user_id || null,
+    scopeType: row.scope_type,
+    providerType: row.provider_type,
+    providerKey: row.provider_key || null,
+    accountRole: row.account_role,
+    emailAddress: row.email_address,
+    displayName: row.display_name || null,
+    signature: row.signature || null,
+    authMethod: row.auth_method,
+    capabilities: safeJsonParse(row.capabilities_json, []),
+    config: safeJsonParse(row.config_json, {}),
+    status: row.status,
+    isDefaultForOrg: Boolean(row.is_default_for_org),
+    isDefaultForUser: Boolean(row.is_default_for_user),
+    lastSyncAt: row.last_sync_at || null,
+    lastSendAt: row.last_send_at || null,
+    lastError: row.last_error || null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    ownerName: row.owner_name || null,
+    ownerEmail: row.owner_email || null,
+    senderEmailAddress: row.sender_email_address || null,
+    senderDisplayName: row.sender_display_name || null,
+  };
+}
+
+function listEmailAccountsForOrg(orgId) {
+  const rows = db.prepare(`SELECT ea.*, u.full_name AS owner_name, u.email AS owner_email FROM email_accounts ea LEFT JOIN users u ON u.id = ea.user_id WHERE ea.organization_id = ? ORDER BY ea.scope_type ASC, ea.created_at DESC`).all(orgId);
+  if (rows.length) return rows.map(serializeEmailAccount);
+
+  const gmail = getProviderSettings(orgId, 'gmail');
+  if (!gmail) return [];
+  return [{
+    id: `legacy_gmail_${orgId}`,
+    organizationId: orgId,
+    userId: null,
+    scopeType: 'organization',
+    providerType: 'google',
+    providerKey: 'gmail',
+    accountRole: 'inbox_and_send',
+    emailAddress: 'workspace-email-not-yet-specified',
+    displayName: null,
+    signature: null,
+    authMethod: 'oauth',
+    capabilities: ['send'],
+    config: gmail.config_json ? safeJsonParse(gmail.config_json, {}) : {},
+    status: gmail.status || 'disconnected',
+    isDefaultForOrg: true,
+    isDefaultForUser: false,
+    lastSyncAt: null,
+    lastSendAt: null,
+    lastError: null,
+    createdAt: gmail.created_at,
+    updatedAt: gmail.updated_at,
+    ownerName: null,
+    ownerEmail: null,
+    isLegacyProviderSetting: true,
+  }];
+}
+
+function createEmailAccount({ organizationId, userId = null, scopeType, providerType, providerKey = null, accountRole = 'inbox_and_send', emailAddress, displayName = null, signature = null, authMethod = 'oauth', capabilities = [], config = {}, status = 'disconnected', isDefaultForOrg = false, isDefaultForUser = false }) {
+  const id = `emacct_${crypto.randomUUID()}`;
+  const ts = nowIso();
+  if (isDefaultForOrg) db.prepare(`UPDATE email_accounts SET is_default_for_org = 0, updated_at = ? WHERE organization_id = ?`).run(ts, organizationId);
+  if (isDefaultForUser && userId) db.prepare(`UPDATE email_accounts SET is_default_for_user = 0, updated_at = ? WHERE user_id = ?`).run(ts, userId);
+  db.prepare(`INSERT INTO email_accounts (id, organization_id, user_id, scope_type, provider_type, provider_key, account_role, email_address, display_name, signature, auth_method, capabilities_json, config_json, status, is_default_for_org, is_default_for_user, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(id, organizationId, userId, scopeType, providerType, providerKey, accountRole, emailAddress, displayName, signature, authMethod, JSON.stringify(capabilities), JSON.stringify(config), status, isDefaultForOrg ? 1 : 0, isDefaultForUser ? 1 : 0, ts, ts);
+  return db.prepare(`SELECT ea.*, u.full_name AS owner_name, u.email AS owner_email FROM email_accounts ea LEFT JOIN users u ON u.id = ea.user_id WHERE ea.id = ? LIMIT 1`).get(id);
+}
+
+function getEmailAccountById(id, organizationId) {
+  return db.prepare(`SELECT ea.*, u.full_name AS owner_name, u.email AS owner_email FROM email_accounts ea LEFT JOIN users u ON u.id = ea.user_id WHERE ea.id = ? AND ea.organization_id = ? LIMIT 1`).get(id, organizationId);
+}
+
+function updateEmailAccount(id, organizationId, patch = {}) {
+  const existing = getEmailAccountById(id, organizationId);
+  if (!existing) return null;
+  const ts = nowIso();
+  const next = {
+    provider_key: patch.providerKey ?? existing.provider_key ?? null,
+    display_name: patch.displayName ?? existing.display_name ?? null,
+    signature: patch.signature ?? existing.signature ?? null,
+    capabilities_json: JSON.stringify(patch.capabilities ?? safeJsonParse(existing.capabilities_json, [])),
+    config_json: JSON.stringify(patch.config ?? safeJsonParse(existing.config_json, {})),
+    status: patch.status ?? existing.status,
+    is_default_for_org: patch.isDefaultForOrg == null ? existing.is_default_for_org : (patch.isDefaultForOrg ? 1 : 0),
+    is_default_for_user: patch.isDefaultForUser == null ? existing.is_default_for_user : (patch.isDefaultForUser ? 1 : 0),
+    last_sync_at: patch.lastSyncAt ?? existing.last_sync_at ?? null,
+    last_send_at: patch.lastSendAt ?? existing.last_send_at ?? null,
+    last_error: patch.lastError ?? existing.last_error ?? null,
+  };
+  if (next.is_default_for_org) db.prepare(`UPDATE email_accounts SET is_default_for_org = 0, updated_at = ? WHERE organization_id = ?`).run(ts, organizationId);
+  if (next.is_default_for_user && existing.user_id) db.prepare(`UPDATE email_accounts SET is_default_for_user = 0, updated_at = ? WHERE user_id = ?`).run(ts, existing.user_id);
+  db.prepare(`UPDATE email_accounts SET provider_key = ?, display_name = ?, signature = ?, capabilities_json = ?, config_json = ?, status = ?, is_default_for_org = ?, is_default_for_user = ?, last_sync_at = ?, last_send_at = ?, last_error = ?, updated_at = ? WHERE id = ? AND organization_id = ?`).run(next.provider_key, next.display_name, next.signature, next.capabilities_json, next.config_json, next.status, next.is_default_for_org, next.is_default_for_user, next.last_sync_at, next.last_send_at, next.last_error, ts, id, organizationId);
+  return getEmailAccountById(id, organizationId);
+}
+
+function getDefaultEmailAccountForOrg(orgId, actor = null) {
+  let row = null;
+  if (actor?.id) {
+    row = db.prepare(`SELECT ea.*, u.full_name AS owner_name, u.email AS owner_email FROM email_accounts ea LEFT JOIN users u ON u.id = ea.user_id WHERE ea.organization_id = ? AND ea.user_id = ? AND ea.is_default_for_user = 1 LIMIT 1`).get(orgId, actor.id);
+    if (row) return row;
+  }
+  row = db.prepare(`SELECT ea.*, u.full_name AS owner_name, u.email AS owner_email FROM email_accounts ea LEFT JOIN users u ON u.id = ea.user_id WHERE ea.organization_id = ? AND ea.is_default_for_org = 1 LIMIT 1`).get(orgId);
+  return row;
+}
+
+function getSelectableEmailAccountsForActor(orgId, actor) {
+  const policy = getEmailPolicyForOrg(orgId);
+  const rows = db.prepare(`SELECT ea.*, u.full_name AS owner_name, u.email AS owner_email FROM email_accounts ea LEFT JOIN users u ON u.id = ea.user_id WHERE ea.organization_id = ? AND (ea.scope_type = 'organization' OR ea.user_id = ?) ORDER BY ea.scope_type ASC, ea.created_at DESC`).all(orgId, actor?.id || '');
+  return rows.filter((row) => row.scope_type === 'organization' || policy.allow_user_mailboxes || row.user_id === actor?.id);
+}
+
+function resolveEmailAccountForSend(orgId, actor, emailAccountId = null, providerKey = null) {
+  if (emailAccountId) {
+    const account = getEmailAccountById(emailAccountId, orgId);
+    if (!account) throw new Error('Selected email account was not found');
+    if (account.scope_type === 'user' && account.user_id !== actor?.id && !PLATFORM_ROLES.has(actor?.role)) throw new Error('You may not use that personal mailbox');
+    return account;
+  }
+  if (providerKey) {
+    const byProvider = getSelectableEmailAccountsForActor(orgId, actor).find((row) => (row.provider_key || row.provider_type) === providerKey);
+    if (byProvider) return byProvider;
+  }
+  return getDefaultEmailAccountForOrg(orgId, actor);
+}
+
+
+function getEmailSyncState(emailAccountId) {
+  return db.prepare(`SELECT * FROM email_sync_state WHERE email_account_id = ? LIMIT 1`).get(emailAccountId);
+}
+
+function upsertEmailSyncState({ organizationId, emailAccountId, providerKey, syncMode = 'manual', lastCursor = null, lastSyncedAt = null, lastStatus = 'idle', lastError = null, lockedBy = null, lockExpiresAt = null, syncIntervalMinutes = 15 }) {
+  const existing = getEmailSyncState(emailAccountId);
+  const ts = nowIso();
+  if (existing) {
+    db.prepare(`UPDATE email_sync_state SET provider_key = ?, sync_mode = ?, last_cursor = ?, last_synced_at = ?, last_status = ?, last_error = ?, locked_by = ?, lock_expires_at = ?, sync_interval_minutes = ?, updated_at = ? WHERE email_account_id = ?`).run(providerKey, syncMode, lastCursor, lastSyncedAt, lastStatus, lastError, lockedBy, lockExpiresAt, syncIntervalMinutes, ts, emailAccountId);
+  } else {
+    db.prepare(`INSERT INTO email_sync_state (id, organization_id, email_account_id, provider_key, sync_mode, last_cursor, last_synced_at, last_status, last_error, locked_by, lock_expires_at, sync_interval_minutes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(`esync_${crypto.randomUUID()}`, organizationId, emailAccountId, providerKey, syncMode, lastCursor, lastSyncedAt, lastStatus, lastError, lockedBy, lockExpiresAt, syncIntervalMinutes, ts, ts);
+  }
+  return getEmailSyncState(emailAccountId);
+}
+
+function claimDueEmailSyncAccounts({ workerId, limit = 10, now = new Date() }) {
+  const nowIsoValue = now.toISOString();
+  const rows = db.prepare(`SELECT ess.*, ea.organization_id, ea.provider_key, ea.provider_type, ea.status AS account_status FROM email_sync_state ess JOIN email_accounts ea ON ea.id = ess.email_account_id WHERE ess.sync_mode = 'background' AND ea.status IN ('connected', 'degraded', 'needs_reauth') AND (ess.last_status != 'running' OR ess.lock_expires_at IS NULL OR ess.lock_expires_at < ?) ORDER BY COALESCE(ess.last_synced_at, '1970-01-01T00:00:00.000Z') ASC LIMIT ?`).all(nowIsoValue, limit);
+  const claimed = [];
+  for (const row of rows) {
+    const lastSyncedMs = row.last_synced_at ? new Date(row.last_synced_at).getTime() : 0;
+    const intervalMs = Math.max(Number(row.sync_interval_minutes || 15), 1) * 60_000;
+    if (lastSyncedMs && Date.now() - lastSyncedMs < intervalMs) continue;
+    const leaseUntil = new Date(Date.now() + 5 * 60_000).toISOString();
+    const result = db.prepare(`UPDATE email_sync_state SET last_status = 'running', locked_by = ?, lock_expires_at = ?, updated_at = ? WHERE email_account_id = ? AND (last_status != 'running' OR lock_expires_at IS NULL OR lock_expires_at < ? )`).run(workerId, leaseUntil, nowIsoValue, row.email_account_id, nowIsoValue);
+    if (result.changes) claimed.push(getEmailSyncState(row.email_account_id));
+  }
+  return claimed;
+}
+
+function recordEmailSyncRunStart({ organizationId, emailAccountId, providerKey, workerId }) {
+  const id = `esr_${crypto.randomUUID()}`;
+  const ts = nowIso();
+  db.prepare(`INSERT INTO email_sync_runs (id, organization_id, email_account_id, provider_key, started_at, status, locked_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?)`).run(id, organizationId, emailAccountId, providerKey, ts, workerId, ts, ts);
+  return id;
+}
+
+function recordEmailSyncRunFinish({ runId, status, importedCount = 0, skippedCount = 0, checkedCount = 0, error = null, details = null }) {
+  const ts = nowIso();
+  db.prepare(`UPDATE email_sync_runs SET completed_at = ?, status = ?, imported_count = ?, skipped_count = ?, checked_count = ?, error = ?, details_json = ?, updated_at = ? WHERE id = ?`).run(ts, status, importedCount, skippedCount, checkedCount, error, details ? JSON.stringify(details) : null, ts, runId);
+}
+
+const emailSyncProviderDispatcher = createProviderDispatcher({
+  syncGmailInboundForAccount,
+  syncMicrosoftInboundForAccount,
+});
+
+const runEmailSyncForAccount = createRunAccountSyncRuntime({
+  db,
+  nowIso,
+  getEmailAccountById,
+  getEmailSyncState,
+  upsertEmailSyncState,
+  recordEmailSyncRunStart,
+  recordEmailSyncRunFinish,
+  providerDispatcher: emailSyncProviderDispatcher,
+});
+
+const runDueEmailSyncs = createSyncRunner({
+  claimDueEmailSyncAccounts,
+  runAccountSync: runEmailSyncForAccount,
+});
+
 function loadGmailClientConfig() {
   if (fs.existsSync(GMAIL_JSON_PATH)) {
     try {
@@ -650,9 +1153,10 @@ function provisionApprovedRequest(request, reviewedByUserId = null, reviewNotes 
   const workspaceType = request.request_kind === 'individual_workspace' ? 'individual' : 'business_verified';
   const orgId = `org_${crypto.randomUUID()}`;
   const userId = `usr_${crypto.randomUUID()}`;
+  const workspaceSlug = ensureUniqueWorkspaceSlug(orgName || orgId);
 
   const tx = db.transaction(() => {
-    db.prepare(`INSERT INTO organizations (id, name, timezone, workspace_type, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`).run(orgId, orgName, 'America/New_York', workspaceType, ts, ts);
+    db.prepare(`INSERT INTO organizations (id, name, timezone, workspace_type, slug, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(orgId, orgName, 'America/New_York', workspaceType, workspaceSlug, ts, ts);
     db.prepare(`INSERT INTO users (id, organization_id, full_name, email, role, status, clerk_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, 'company_owner', 'active', ?, ?, ?)`).run(userId, orgId, fullName, email, request.clerk_user_id || null, ts, ts);
     db.prepare(`INSERT INTO settings (id, organization_id, key, value_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`).run(`set_${crypto.randomUUID()}`, orgId, BUSINESS_SETTINGS_KEY, JSON.stringify({
       businessName: orgName,
@@ -667,7 +1171,7 @@ function provisionApprovedRequest(request, reviewedByUserId = null, reviewNotes 
   });
 
   tx();
-  return { organization: { id: orgId, name: orgName, workspaceType }, user: { id: userId, email, role: 'company_owner' } };
+  return { organization: { id: orgId, name: orgName, slug: workspaceSlug, workspaceType }, user: { id: userId, email, role: 'company_owner' } };
 }
 
 function getRoleDisplayLabel(role) {
@@ -740,7 +1244,9 @@ app.get('/api/access/me', requireIdentity, (req, res) => {
       workspace: {
         id: org?.id || actor.organization_id,
         name: org?.name || DEFAULT_ORG_NAME,
+        slug: org?.slug || 'platform',
         workspaceType: 'platform',
+        surface: 'control',
       },
       user: {
         id: actor.id,
@@ -771,7 +1277,9 @@ app.get('/api/access/me', requireIdentity, (req, res) => {
       workspace: {
         id: workspace.id,
         name: workspace.name,
+        slug: workspace.slug || ensureUniqueWorkspaceSlug(workspace.name || workspace.id, workspace.id),
         workspaceType: workspace.workspace_type,
+        surface: getSurfaceForRole(workspace.user_role),
       },
       user: {
         id: workspace.user_id,
@@ -979,7 +1487,7 @@ app.put('/api/settings/ai', requirePermission('settings.manageBusiness'), (req, 
     usage_plan: normalizeString(incoming.usagePlan) || current?.usage_plan || 'standard',
     monthly_message_limit: Math.max(1, Number(incoming.monthlyMessageLimit || current?.monthly_message_limit || 250)),
     monthly_ai_token_budget: Math.max(1000, Number(incoming.monthlyAiTokenBudget || current?.monthly_ai_token_budget || 250000)),
-    model_policy_json: JSON.stringify(incoming.modelPolicy && typeof incoming.modelPolicy === 'object' ? incoming.modelPolicy : (current?.model_policy || { primaryProvider: 'stub', allowedModels: ['stub/draft-v1'] })),
+    model_policy_json: JSON.stringify(incoming.modelPolicy && typeof incoming.modelPolicy === 'object' ? incoming.modelPolicy : (current?.model_policy || { primaryProvider: 'stub', primaryModel: 'stub/draft-v1', allowedModels: ['stub/draft-v1'] })),
   };
   const ts = nowIso();
   if (current) {
@@ -1029,6 +1537,34 @@ app.get('/api/ai/runs', requirePermission('communications.view'), (req, res) => 
   res.json({ ok: true, runs: rows });
 });
 
+app.get('/api/ai/runs/:id', requirePermission('communications.view'), (req, res) => {
+  const orgId = getActorOrgId(req);
+  const run = db.prepare(`SELECT r.*, l.full_name AS lead_full_name, l.email AS lead_email, l.status AS lead_status, l.urgency_status AS lead_urgency_status FROM ai_runs r LEFT JOIN leads l ON l.id = r.lead_id WHERE r.organization_id = ? AND r.id = ? LIMIT 1`).get(orgId, req.params.id);
+  if (!run) return res.status(404).json({ ok: false, error: 'AI run not found' });
+
+  const outputs = db.prepare(`SELECT id, output_type, content_json, created_at FROM ai_run_outputs WHERE ai_run_id = ? ORDER BY created_at ASC`).all(run.id).map((row) => ({
+    id: row.id,
+    outputType: row.output_type,
+    content: safeJsonParse(row.content_json, null),
+    createdAt: row.created_at,
+  }));
+
+  res.json({
+    ok: true,
+    run: {
+      ...run,
+      lead: run.lead_id ? {
+        id: run.lead_id,
+        fullName: run.lead_full_name || null,
+        email: run.lead_email || null,
+        status: run.lead_status || null,
+        urgencyStatus: run.lead_urgency_status || null,
+      } : null,
+    },
+    outputs,
+  });
+});
+
 app.get('/api/platform/directory', requirePermission('platform.users.manage'), (req, res) => {
   const q = normalizeString(req.query.q || '').toLowerCase();
   const limit = Math.min(Number(req.query.limit || 25), 100);
@@ -1038,13 +1574,13 @@ app.get('/api/platform/directory', requirePermission('platform.users.manage'), (
     : db.prepare(`SELECT u.*, o.name AS organization_name FROM users u LEFT JOIN organizations o ON o.id = u.organization_id ORDER BY u.created_at DESC LIMIT ?`).all(limit);
 
   const organizations = q
-    ? db.prepare(`SELECT * FROM organizations WHERE lower(name) LIKE ? ORDER BY created_at DESC LIMIT ?`).all(`%${q}%`, limit)
+    ? db.prepare(`SELECT * FROM organizations WHERE lower(name) LIKE ? OR lower(COALESCE(slug, '')) LIKE ? ORDER BY created_at DESC LIMIT ?`).all(`%${q}%`, `%${q}%`, limit)
     : db.prepare(`SELECT * FROM organizations ORDER BY created_at DESC LIMIT ?`).all(limit);
 
   res.json({
     ok: true,
     users: users.map((row) => ({ ...serializeUser(row), organizationName: row.organization_name })),
-    organizations,
+    organizations: organizations.map((org) => ({ ...org, slug: org.slug || ensureUniqueWorkspaceSlug(org.name || org.id, org.id) })),
   });
 });
 
@@ -1351,7 +1887,7 @@ app.get('/api/users-lite', requirePermission('leads.view'), (req, res) => {
   res.json({ ok: true, users: rows.map((row) => ({ id: row.id, fullName: row.full_name, email: row.email, role: row.role })) });
 });
 
-app.post('/api/leads/intake', (req, res) => {
+app.post('/api/leads/intake', async (req, res) => {
   const validated = validateLead(req.body || {});
   if (!validated.ok) return res.status(400).json({ ok: false, errors: validated.errors });
 
@@ -1391,7 +1927,18 @@ app.post('/api/leads/intake', (req, res) => {
 
   tx();
 
-  res.status(201).json({ ok: true, lead: { id: leadId, status: 'new', receivedAt: ts, ...validated.data } });
+  let autoDraft = null;
+  const aiSettings = getAiSettingsForOrg(DEFAULT_ORG_ID);
+  const shouldAutoDraft = Boolean(aiSettings?.ai_enabled && aiSettings?.allowed_actions?.includes('draft_message') && aiSettings?.compliance_policy?.autoGenerateFirstResponseOnLeadCreate);
+  if (shouldAutoDraft) {
+    try {
+      autoDraft = await generateLeadDraftForLead({ orgId: DEFAULT_ORG_ID, leadId, triggerType: 'auto', triggerId: leadId });
+    } catch (error) {
+      db.prepare(`INSERT INTO events (id, organization_id, lead_id, event_type, payload_json, created_at) VALUES (?, ?, ?, 'lead.auto_draft_failed', ?, ?)`).run(`evt_${crypto.randomUUID()}`, DEFAULT_ORG_ID, leadId, JSON.stringify({ error: error?.message || 'Auto draft failed' }), nowIso());
+    }
+  }
+
+  res.status(201).json({ ok: true, lead: { id: leadId, status: 'new', receivedAt: ts, ...validated.data }, autoDraft: autoDraft ? { draftId: autoDraft.draftId, runId: autoDraft.runId, draft: autoDraft.draft } : null });
 });
 
 app.post('/api/leads/duplicates', requirePermission('leads.view'), (req, res) => {
@@ -1514,26 +2061,14 @@ app.post('/api/leads/:id/ai/draft-response', requirePermission('communications.c
   const lead = db.prepare(`SELECT * FROM leads WHERE organization_id = ? AND id = ? LIMIT 1`).get(orgId, req.params.id);
   if (!lead) return res.status(404).json({ ok: false, error: 'Lead not found' });
 
-  const org = db.prepare(`SELECT * FROM organizations WHERE id = ? LIMIT 1`).get(orgId);
-  const settings = getAiSettingsForOrg(orgId);
-  if (!settings) return res.status(404).json({ ok: false, error: 'AI settings not found' });
-  if (!settings.ai_enabled) return res.status(409).json({ ok: false, error: 'AI is disabled for this organization' });
-  if (!settings.allowed_actions.includes('draft_message')) return res.status(403).json({ ok: false, error: 'Draft generation is not allowed for this organization' });
-
-  const runId = `air_${crypto.randomUUID()}`;
-  const outputId = `airo_${crypto.randomUUID()}`;
-  const ts = nowIso();
-  db.prepare(`INSERT INTO ai_runs (id, organization_id, workflow_type, trigger_type, trigger_id, lead_id, status, mode, started_at, created_at, updated_at) VALUES (?, ?, 'lead_reply_draft', 'manual', ?, ?, 'pending', ?, ?, ?, ?)`)
-    .run(runId, orgId, req.params.id, lead.id, settings.default_mode, ts, ts, ts);
-
   try {
-    const result = await runDraftOnlyLeadResponse({ org, lead, settings });
-    db.prepare(`UPDATE ai_runs SET status = 'completed', provider = ?, model = ?, input_tokens = ?, output_tokens = ?, estimated_cost = ?, completed_at = ?, updated_at = ? WHERE id = ?`).run(result.provider, result.model, result.inputTokens, result.outputTokens, result.estimatedCost, nowIso(), nowIso(), runId);
-    db.prepare(`INSERT INTO ai_run_outputs (id, ai_run_id, output_type, content_json, created_at) VALUES (?, ?, 'draft_message', ?, ?)`).run(outputId, runId, JSON.stringify(result.output), nowIso());
-    res.json({ ok: true, run: { id: runId, status: 'completed', provider: result.provider, model: result.model }, draft: result.output });
+    const result = await generateLeadDraftForLead({ orgId, leadId: req.params.id, triggerType: 'manual', triggerId: req.params.id });
+    const run = db.prepare(`SELECT id, status, provider, model FROM ai_runs WHERE id = ? LIMIT 1`).get(result.runId);
+    res.json({ ok: true, run, draft: result.draft });
   } catch (error) {
-    db.prepare(`UPDATE ai_runs SET status = 'failed', error_code = ?, error_message = ?, completed_at = ?, updated_at = ? WHERE id = ?`).run('draft_failed', error?.message || 'AI draft failed', nowIso(), nowIso(), runId);
-    res.status(500).json({ ok: false, error: error?.message || 'AI draft failed' });
+    const message = error?.message || 'AI draft failed';
+    const status = /disabled/.test(message) ? 409 : /allowed/.test(message) ? 403 : /not found/.test(message) ? 404 : 500;
+    res.status(status).json({ ok: false, error: message });
   }
 });
 
@@ -1837,6 +2372,11 @@ app.post('/api/leads/:id/email-drafts', requirePermission('emailDrafts.manage'),
   const subject = normalizeString(req.body?.subject);
   const body = normalizeString(req.body?.body);
   const source = normalizeString(req.body?.source || 'manual').toLowerCase();
+  if (!providerKey) {
+    const defaultAccount = getDefaultEmailAccountForOrg(orgId, req.actor);
+    providerKey = defaultAccount?.provider_key || 'stub';
+  }
+
   if (!toEmail) return res.status(400).json({ ok: false, error: 'toEmail is required' });
   if (!subject) return res.status(400).json({ ok: false, error: 'subject is required' });
   if (!body) return res.status(400).json({ ok: false, error: 'body is required' });
@@ -1867,18 +2407,34 @@ app.post('/api/email/providers/gmail/bootstrap', requirePermission('emailOutbox.
   res.json({ ok: true, provider: { key: 'gmail', status: saved.status, clientId: saved.client_id, redirectUri: saved.redirect_uri } });
 });
 
+app.post('/api/email/providers/microsoft/bootstrap', requirePermission('emailOutbox.manage'), (req, res) => {
+  const clientId = normalizeString(process.env.MICROSOFT_CLIENT_ID || '');
+  const clientSecret = normalizeString(process.env.MICROSOFT_CLIENT_SECRET || '');
+  const redirectUri = normalizeString(process.env.MICROSOFT_REDIRECT_URI || `${PUBLIC_APP_ORIGIN}/api/auth/microsoft/callback`);
+  const saved = saveProviderSettingsRow(getActorOrgId(req), 'microsoft', {
+    status: clientId && clientSecret ? 'ready_for_auth' : 'disconnected',
+    client_id: clientId || undefined,
+    client_secret: clientSecret || undefined,
+    redirect_uri: redirectUri || undefined,
+  });
+  res.json({ ok: true, provider: { key: 'microsoft', status: saved.status, clientId: saved.client_id, redirectUri: saved.redirect_uri } });
+});
+
 app.get('/api/auth/gmail/start', requirePermission('emailOutbox.manage'), (req, res) => {
   const orgId = getActorOrgId(req);
+  const accountId = normalizeString(req.query.accountId);
   const saved = getProviderSettings(orgId, 'gmail') || saveProviderSettingsRow(orgId, 'gmail', {});
   const clientId = saved?.client_id;
   const redirectUri = saved?.redirect_uri;
   if (!clientId || !redirectUri) return res.status(400).json({ ok: false, error: 'Gmail provider is missing client configuration' });
-  const authUrl = buildAuthUrl({ clientId, redirectUri, state: orgId });
-  res.json({ ok: true, authUrl });
+  const state = accountId ? `${orgId}:${accountId}` : orgId;
+  const authUrl = buildAuthUrl({ clientId, redirectUri, state });
+  res.json({ ok: true, authUrl, accountId: accountId || null });
 });
 
 app.get('/api/auth/gmail/callback', async (req, res) => {
-  const orgId = normalizeString(req.query.orgId) || DEFAULT_ORG_ID;
+  const rawState = normalizeString(req.query.state || req.query.orgId) || DEFAULT_ORG_ID;
+  const [orgId, accountId] = rawState.includes(':') ? rawState.split(':') : [rawState, null];
   const code = normalizeString(req.query.code);
   const error = normalizeString(req.query.error);
   if (error) return res.status(400).send(`Gmail OAuth error: ${error}`);
@@ -1890,17 +2446,294 @@ app.get('/api/auth/gmail/callback', async (req, res) => {
     const tokens = await exchangeCodeForTokens({ clientId: saved.client_id, clientSecret: saved.client_secret, redirectUri: saved.redirect_uri, code });
     const profile = await fetchGoogleProfile(tokens.access_token);
     const config = saved.config_json ? JSON.parse(saved.config_json) : {};
-    const updated = saveProviderSettingsRow(orgId, 'gmail', {
+    saveProviderSettingsRow(orgId, 'gmail', {
       status: 'connected',
       config: { ...config, email: profile.email || null },
       access_token: tokens.access_token,
       refresh_token: tokens.refresh_token || saved.refresh_token,
       token_expires_at: new Date(Date.now() + Number(tokens.expires_in || 3600) * 1000).toISOString(),
     });
-    return res.send(`Gmail connected for ${profile.email || 'account'} — you can close this tab.`);
+    if (accountId) {
+      const account = getEmailAccountById(accountId, orgId);
+      if (account) {
+        updateEmailAccount(accountId, orgId, {
+          providerKey: 'gmail',
+          status: 'connected',
+          config: {
+            ...(safeJsonParse(account.config_json, {})),
+            gmailEmail: profile.email || null,
+          },
+          lastError: null,
+        });
+      }
+    }
+    return res.send(`Gmail connected for ${profile.email || 'account'}${accountId ? ' and linked to LeadSprint email account' : ''} — you can close this tab.`);
   } catch (err) {
     return res.status(500).send(`Gmail OAuth callback failed: ${err.message}`);
   }
+});
+
+app.get('/api/auth/microsoft/callback', async (req, res) => {
+  const rawState = normalizeString(req.query.state || req.query.orgId) || DEFAULT_ORG_ID;
+  const [orgId, accountId] = rawState.includes(':') ? rawState.split(':') : [rawState, null];
+  const code = normalizeString(req.query.code);
+  const error = normalizeString(req.query.error);
+  if (error) return res.status(400).send(`Microsoft OAuth error: ${error}`);
+  if (!code) return res.status(400).send('Missing OAuth code');
+
+  try {
+    const saved = getProviderSettings(orgId, 'microsoft');
+    if (!saved?.client_id || !saved?.client_secret || !saved?.redirect_uri) throw new Error('Microsoft provider settings are incomplete');
+    const tokens = await exchangeMicrosoftCodeForTokens({ clientId: saved.client_id, clientSecret: saved.client_secret, redirectUri: saved.redirect_uri, code });
+    const profile = await fetchMicrosoftProfile(tokens.access_token);
+    const config = saved.config_json ? JSON.parse(saved.config_json) : {};
+    saveProviderSettingsRow(orgId, 'microsoft', {
+      status: 'connected',
+      config: { ...config, email: profile.mail || profile.userPrincipalName || null },
+      access_token: tokens.access_token,
+      refresh_token: tokens.refresh_token || saved.refresh_token,
+      token_expires_at: new Date(Date.now() + Number(tokens.expires_in || 3600) * 1000).toISOString(),
+    });
+    if (accountId) {
+      const account = getEmailAccountById(accountId, orgId);
+      if (account) {
+        updateEmailAccount(accountId, orgId, {
+          providerKey: 'microsoft',
+          status: 'connected',
+          config: {
+            ...(safeJsonParse(account.config_json, {})),
+            microsoftEmail: profile.mail || profile.userPrincipalName || null,
+          },
+          lastError: null,
+        });
+      }
+    }
+    return res.send(`Microsoft connected for ${profile.mail || profile.userPrincipalName || 'account'}${accountId ? ' and linked to LeadSprint email account' : ''} — you can close this tab.`);
+  } catch (err) {
+    return res.status(500).send(`Microsoft OAuth callback failed: ${err.message}`);
+  }
+});
+
+
+app.get('/api/settings/email', requirePermission('emailOutbox.manage'), (req, res) => {
+  const orgId = getActorOrgId(req);
+  const accounts = listEmailAccountsForOrg(orgId).map((account) => ({ ...account, syncState: getEmailSyncState(account.id) || null }));
+  const syncRuns = db.prepare(`SELECT * FROM email_sync_runs WHERE organization_id = ? ORDER BY started_at DESC LIMIT 25`).all(orgId);
+  res.json({ ok: true, policy: getEmailPolicyForOrg(orgId), accounts, syncRuns });
+});
+app.get('/api/email/accounts/sendable', requirePermission('emailOutbox.manage'), (req, res) => {
+  const orgId = getActorOrgId(req);
+  const rows = getSelectableEmailAccountsForActor(orgId, req.actor);
+  res.json({ ok: true, accounts: rows.map(serializeEmailAccount) });
+});
+
+
+app.put('/api/settings/email/policy', requirePermission('settings.manageBusiness'), (req, res) => {
+  const orgId = getActorOrgId(req);
+  const policy = saveEmailPolicyForOrg(orgId, req.body || {});
+  res.json({ ok: true, policy });
+});
+
+app.post('/api/settings/email/accounts', requirePermission('emailOutbox.manage'), (req, res) => {
+  const orgId = getActorOrgId(req);
+  const actor = req.actor;
+  const body = req.body || {};
+  const scopeType = normalizeString(body.scopeType || 'organization');
+  const emailAddress = normalizeString(body.emailAddress).toLowerCase();
+  if (!emailAddress) return res.status(400).json({ ok: false, error: 'emailAddress is required' });
+
+  const policy = getEmailPolicyForOrg(orgId);
+  let userId = null;
+  if (scopeType === 'user') {
+    if (!policy.allow_user_mailboxes) return res.status(403).json({ ok: false, error: 'User-level mailboxes are not enabled for this workspace' });
+    if (!policy.allowed_user_mailbox_roles.includes(actor.role) && !PLATFORM_ROLES.has(actor.role)) {
+      return res.status(403).json({ ok: false, error: 'Your role may not connect a personal mailbox' });
+    }
+    userId = actor.id;
+  }
+
+  const created = createEmailAccount({
+    organizationId: orgId,
+    userId,
+    scopeType: scopeType === 'user' ? 'user' : 'organization',
+    providerType: normalizeString(body.providerType || 'stub') || 'stub',
+    providerKey: normalizeString(body.providerKey) || null,
+    accountRole: normalizeString(body.accountRole || 'inbox_and_send') || 'inbox_and_send',
+    emailAddress,
+    displayName: normalizeString(body.displayName) || null,
+    signature: normalizeString(body.signature) || null,
+    authMethod: normalizeString(body.authMethod || 'oauth') || 'oauth',
+    capabilities: Array.isArray(body.capabilities) ? body.capabilities : ['send'],
+    config: body.config && typeof body.config === 'object' ? body.config : {},
+    status: normalizeString(body.status || 'disconnected') || 'disconnected',
+    isDefaultForOrg: Boolean(body.isDefaultForOrg),
+    isDefaultForUser: Boolean(body.isDefaultForUser),
+  });
+
+  res.status(201).json({ ok: true, account: serializeEmailAccount(created) });
+});
+
+app.post('/api/settings/email/accounts/:id/default', requirePermission('emailOutbox.manage'), (req, res) => {
+  const orgId = getActorOrgId(req);
+  const account = getEmailAccountById(req.params.id, orgId);
+  if (!account) return res.status(404).json({ ok: false, error: 'Email account not found' });
+  const updated = updateEmailAccount(account.id, orgId, {
+    isDefaultForOrg: account.scope_type === 'organization',
+    isDefaultForUser: account.scope_type === 'user',
+  });
+  res.json({ ok: true, account: serializeEmailAccount(updated) });
+});
+
+app.post('/api/settings/email/accounts/:id/disconnect', requirePermission('emailOutbox.manage'), (req, res) => {
+  const orgId = getActorOrgId(req);
+  const account = getEmailAccountById(req.params.id, orgId);
+  if (!account) return res.status(404).json({ ok: false, error: 'Email account not found' });
+  const updated = updateEmailAccount(account.id, orgId, { status: 'disconnected', lastError: null, providerKey: account.provider_key });
+  res.json({ ok: true, account: serializeEmailAccount(updated) });
+});
+
+app.delete('/api/settings/email/accounts/:id', requirePermission('emailOutbox.manage'), (req, res) => {
+  const orgId = getActorOrgId(req);
+  const account = getEmailAccountById(req.params.id, orgId);
+  if (!account) return res.status(404).json({ ok: false, error: 'Email account not found' });
+  db.prepare(`DELETE FROM email_accounts WHERE id = ? AND organization_id = ?`).run(account.id, orgId);
+  res.json({ ok: true, removedId: account.id });
+});
+
+app.post('/api/settings/email/accounts/:id/connect-gmail', requirePermission('emailOutbox.manage'), (req, res) => {
+  const orgId = getActorOrgId(req);
+  const account = getEmailAccountById(req.params.id, orgId);
+  if (!account) return res.status(404).json({ ok: false, error: 'Email account not found' });
+  if (account.provider_type !== 'google') return res.status(400).json({ ok: false, error: 'Only Google email accounts can use Gmail OAuth' });
+
+  const saved = getProviderSettings(orgId, 'gmail') || saveProviderSettingsRow(orgId, 'gmail', {});
+  const clientId = saved?.client_id;
+  const redirectUri = saved?.redirect_uri;
+  if (!clientId || !redirectUri) return res.status(400).json({ ok: false, error: 'Gmail provider is missing client configuration' });
+
+  updateEmailAccount(account.id, orgId, { providerKey: 'gmail', status: 'needs_reauth' });
+  const authUrl = buildAuthUrl({ clientId, redirectUri, state: `${orgId}:${account.id}` });
+  res.json({ ok: true, authUrl, account: serializeEmailAccount(getEmailAccountById(account.id, orgId)) });
+});
+
+
+app.post('/api/settings/email/accounts/:id/connect-microsoft', requirePermission('emailOutbox.manage'), (req, res) => {
+  const orgId = getActorOrgId(req);
+  const account = getEmailAccountById(req.params.id, orgId);
+  if (!account) return res.status(404).json({ ok: false, error: 'Email account not found' });
+  if (account.provider_type !== 'microsoft') return res.status(400).json({ ok: false, error: 'Only Microsoft email accounts can use Microsoft OAuth' });
+
+  const saved = getProviderSettings(orgId, 'microsoft') || saveProviderSettingsRow(orgId, 'microsoft', {});
+  const clientId = saved?.client_id;
+  const redirectUri = saved?.redirect_uri;
+  if (!clientId || !redirectUri) return res.status(400).json({ ok: false, error: 'Microsoft provider is missing client configuration' });
+
+  updateEmailAccount(account.id, orgId, { providerKey: 'microsoft', status: 'needs_reauth' });
+  const authUrl = buildMicrosoftAuthUrl({ clientId, redirectUri, state: `${orgId}:${account.id}` });
+  res.json({ ok: true, authUrl, account: serializeEmailAccount(getEmailAccountById(account.id, orgId)) });
+});
+
+
+app.post('/api/settings/email/accounts/:id/sync-mode', requirePermission('emailOutbox.manage'), (req, res) => {
+  const orgId = getActorOrgId(req);
+  const account = getEmailAccountById(req.params.id, orgId);
+  if (!account) return res.status(404).json({ ok: false, error: 'Email account not found' });
+  const syncMode = ['manual', 'background'].includes(normalizeString(req.body?.syncMode)) ? normalizeString(req.body?.syncMode) : 'manual';
+  const existing = getEmailSyncState(account.id);
+  const state = upsertEmailSyncState({ organizationId: orgId, emailAccountId: account.id, providerKey: account.provider_key || account.provider_type || 'unknown', syncMode, lastCursor: existing?.last_cursor || null, lastSyncedAt: existing?.last_synced_at || null, lastStatus: existing?.last_status || 'idle', lastError: existing?.last_error || null });
+  res.json({ ok: true, syncState: state });
+});
+
+app.post('/api/settings/email/accounts/:id/verify', requirePermission('emailOutbox.manage'), async (req, res) => {
+  const orgId = getActorOrgId(req);
+  const account = getEmailAccountById(req.params.id, orgId);
+  if (!account) return res.status(404).json({ ok: false, error: 'Email account not found' });
+
+  const providerKey = account.provider_key || account.provider_type || 'stub';
+  const provider = getProvider(providerKey);
+  if (!provider?.verify) return res.status(400).json({ ok: false, error: 'This provider does not support verification' });
+
+  try {
+    const providerSettings = providerKey ? getProviderSettings(orgId, providerKey) : null;
+    const result = await provider.verify({
+      providerSettings,
+      emailAccount: account,
+      saveProviderSettings: (patch) => saveProviderSettingsRow(orgId, providerKey, patch),
+    });
+    const updated = updateEmailAccount(account.id, orgId, { status: 'connected', lastError: null });
+    res.json({ ok: true, verification: result, account: serializeEmailAccount(updated) });
+  } catch (error) {
+    const updated = updateEmailAccount(account.id, orgId, { status: 'degraded', lastError: error?.message || 'Verification failed' });
+    res.status(400).json({ ok: false, error: error?.message || 'Verification failed', account: serializeEmailAccount(updated) });
+  }
+});
+
+app.post('/api/settings/email/accounts/:id/sync', requirePermission('communications.view'), async (req, res) => {
+  const orgId = getActorOrgId(req);
+  const account = getEmailAccountById(req.params.id, orgId);
+  if (!account) return res.status(404).json({ ok: false, error: 'Email account not found' });
+  try {
+    const providerKey = account.provider_key || account.provider_type;
+    if (!['gmail', 'microsoft'].includes(providerKey)) {
+      return res.status(400).json({ ok: false, error: 'Manual sync is currently implemented for Gmail and Microsoft accounts only' });
+    }
+    const result = await runEmailSyncForAccount({ emailAccountId: account.id, workerId: `manual:${req.actor.id}` });
+    res.json({ ok: true, result, account: serializeEmailAccount(getEmailAccountById(account.id, orgId)) });
+  } catch (error) {
+    const updated = updateEmailAccount(account.id, orgId, { status: 'degraded', lastError: error?.message || 'Sync failed' });
+    upsertEmailSyncState({ organizationId: orgId, emailAccountId: account.id, providerKey: account.provider_key || account.provider_type || 'unknown', syncMode: getEmailSyncState(account.id)?.sync_mode || 'manual', lastCursor: getEmailSyncState(account.id)?.last_cursor || null, lastSyncedAt: getEmailSyncState(account.id)?.last_synced_at || null, lastStatus: 'error', lastError: error?.message || 'Sync failed' });
+    res.status(400).json({ ok: false, error: error?.message || 'Sync failed', account: serializeEmailAccount(updated) });
+  }
+});
+
+app.post('/api/settings/email/accounts/:id/test-send', requirePermission('emailOutbox.manage'), async (req, res) => {
+  const orgId = getActorOrgId(req);
+  const account = getEmailAccountById(req.params.id, orgId);
+  if (!account) return res.status(404).json({ ok: false, error: 'Email account not found' });
+  const toEmail = normalizeString(req.body?.toEmail || req.actor.email).toLowerCase();
+  if (!toEmail) return res.status(400).json({ ok: false, error: 'Test recipient email is required' });
+
+  const providerKey = account.provider_key || account.provider_type || 'stub';
+  const provider = getProvider(providerKey);
+  try {
+    const providerSettings = providerKey ? getProviderSettings(orgId, providerKey) : null;
+    const result = await provider.send({
+      toEmail,
+      subject: `[LeadSprint] Test email from ${account.email_address}`,
+      body: `This is a LeadSprint test email for ${account.email_address}. If you received it, the account transport is working.`,
+      providerSettings,
+      emailAccount: account,
+      saveProviderSettings: (patch) => saveProviderSettingsRow(orgId, providerKey, patch),
+    });
+    const updated = updateEmailAccount(account.id, orgId, { status: 'connected', lastError: null, lastSendAt: nowIso() });
+    res.json({ ok: true, result, account: serializeEmailAccount(updated) });
+  } catch (error) {
+    const updated = updateEmailAccount(account.id, orgId, { status: 'degraded', lastError: error?.message || 'Test send failed' });
+    res.status(400).json({ ok: false, error: error?.message || 'Test send failed', account: serializeEmailAccount(updated) });
+  }
+});
+
+app.put('/api/settings/email/accounts/:id/config', requirePermission('emailOutbox.manage'), (req, res) => {
+  const orgId = getActorOrgId(req);
+  const account = getEmailAccountById(req.params.id, orgId);
+  if (!account) return res.status(404).json({ ok: false, error: 'Email account not found' });
+  const currentConfig = safeJsonParse(account.config_json, {});
+  const config = req.body?.config && typeof req.body.config === 'object' ? req.body.config : {};
+  const mergedConfig = { ...currentConfig, ...config };
+  const nextProviderKey = req.body?.providerKey ? normalizeString(req.body.providerKey) : account.provider_key;
+  let nextStatus = req.body?.status ? normalizeString(req.body.status) : account.status;
+
+  if ((account.provider_type === 'imap_smtp' || account.provider_type === 'smtp_only') && nextProviderKey === 'imap_smtp') {
+    const hasSmtp = Boolean(mergedConfig.smtpHost && mergedConfig.smtpPort && mergedConfig.smtpUsername);
+    nextStatus = hasSmtp ? 'connected' : 'degraded';
+  }
+
+  const updated = updateEmailAccount(account.id, orgId, {
+    config: mergedConfig,
+    status: nextStatus,
+    providerKey: nextProviderKey,
+  });
+  res.json({ ok: true, account: serializeEmailAccount(updated) });
 });
 
 app.get('/api/email/provider-settings', requirePermission('emailOutbox.manage'), (req, res) => {
@@ -1939,8 +2772,8 @@ app.put('/api/email/provider-settings/:providerKey', requirePermission('emailOut
 
 app.get('/api/leads/:id/email-outbox', requirePermission('emailOutbox.manage'), (req, res) => {
   const orgId = getActorOrgId(req);
-  const rows = db.prepare(`SELECT o.*, COALESCE(u.full_name, 'System') AS created_by_name FROM email_outbox o LEFT JOIN users u ON u.id = o.created_by_user_id WHERE o.organization_id = ? AND o.lead_id = ? ORDER BY o.created_at DESC`).all(orgId, req.params.id);
-  res.json({ ok: true, items: rows.map((row) => ({ id: row.id, emailDraftId: row.email_draft_id || null, toEmail: row.to_email, subject: row.subject, body: row.body, providerKey: row.provider_key || 'stub', sendStatus: row.send_status, queuedAt: row.queued_at, sentAt: row.sent_at || null, failedAt: row.failed_at || null, lastError: row.last_error || null, createdAt: row.created_at, createdByName: row.created_by_name })) });
+  const rows = db.prepare(`SELECT o.*, COALESCE(u.full_name, 'System') AS created_by_name, ea.email_address AS sender_email_address, ea.display_name AS sender_display_name FROM email_outbox o LEFT JOIN users u ON u.id = o.created_by_user_id LEFT JOIN events e ON e.organization_id = o.organization_id AND e.lead_id = o.lead_id AND e.event_type = 'lead.email_queued' AND json_extract(e.payload_json, '$.toEmail') = o.to_email AND json_extract(e.payload_json, '$.subject') = o.subject LEFT JOIN email_accounts ea ON ea.id = json_extract(e.payload_json, '$.emailAccountId') WHERE o.organization_id = ? AND o.lead_id = ? ORDER BY o.created_at DESC`).all(orgId, req.params.id);
+  res.json({ ok: true, items: rows.map(serializeOutboxItem) });
 });
 
 app.post('/api/leads/:id/email-outbox', requirePermission('emailOutbox.manage'), (req, res) => {
@@ -1952,7 +2785,8 @@ app.post('/api/leads/:id/email-outbox', requirePermission('emailOutbox.manage'),
   let toEmail = normalizeString(req.body?.toEmail || lead.email).toLowerCase();
   let subject = normalizeString(req.body?.subject);
   let body = normalizeString(req.body?.body);
-  const providerKey = normalizeString(req.body?.providerKey || 'stub') || 'stub';
+  const emailAccountId = normalizeString(req.body?.emailAccountId) || null;
+  let providerKey = normalizeString(req.body?.providerKey || '') || null;
 
   if (emailDraftId) {
     const draft = db.prepare(`SELECT * FROM email_drafts WHERE organization_id = ? AND lead_id = ? AND id = ? LIMIT 1`).get(orgId, req.params.id, emailDraftId);
@@ -1960,6 +2794,16 @@ app.post('/api/leads/:id/email-outbox', requirePermission('emailOutbox.manage'),
     toEmail = toEmail || draft.to_email;
     subject = subject || draft.subject;
     body = body || draft.body;
+  }
+
+  const selectedAccount = resolveEmailAccountForSend(orgId, req.actor, emailAccountId, providerKey);
+  providerKey = selectedAccount?.provider_key || selectedAccount?.provider_type || providerKey || 'stub';
+  if (selectedAccount) {
+    const capabilities = safeJsonParse(selectedAccount.capabilities_json || '[]', []);
+    if (!capabilities.includes('send')) return res.status(400).json({ ok: false, error: 'Selected email account cannot send outbound email' });
+    if (!['connected', 'needs_reauth', 'degraded'].includes(selectedAccount.status) && providerKey !== 'stub') {
+      return res.status(400).json({ ok: false, error: 'Selected email account is not ready for outbound use' });
+    }
   }
 
   if (!toEmail) return res.status(400).json({ ok: false, error: 'toEmail is required' });
@@ -1972,38 +2816,86 @@ app.post('/api/leads/:id/email-outbox', requirePermission('emailOutbox.manage'),
 
   const tx = db.transaction(() => {
     db.prepare(`INSERT INTO email_outbox (id, organization_id, lead_id, email_draft_id, to_email, subject, body, provider_key, send_status, queued_at, created_by_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)`).run(id, orgId, req.params.id, emailDraftId, toEmail, subject, body, providerKey, ts, req.actor.id, ts, ts);
-    db.prepare(`INSERT INTO events (id, organization_id, lead_id, event_type, payload_json, created_at) VALUES (?, ?, ?, 'lead.email_queued', ?, ?)`).run(eventId, orgId, req.params.id, JSON.stringify({ toEmail, subject, providerKey, emailDraftId }), ts);
+    db.prepare(`INSERT INTO events (id, organization_id, lead_id, event_type, payload_json, created_at) VALUES (?, ?, ?, 'lead.email_queued', ?, ?)`).run(eventId, orgId, req.params.id, JSON.stringify({ toEmail, subject, providerKey, emailDraftId, emailAccountId: selectedAccount?.id || null }), ts);
   });
   tx();
 
-  res.status(201).json({ ok: true, item: { id, emailDraftId, toEmail, subject, body, providerKey, sendStatus: 'queued', queuedAt: ts, createdAt: ts, createdByName: req.actor.full_name } });
+  res.status(201).json({ ok: true, item: { id, emailDraftId, emailAccountId: selectedAccount?.id || null, toEmail, subject, body, providerKey, sendStatus: 'queued', queuedAt: ts, createdAt: ts, createdByName: req.actor.full_name } });
 });
+
+
+async function processOutboxRow(item, actorName) {
+  const provider = getProvider(item.provider_key || 'stub');
+  let providerSettings = item.provider_key ? getProviderSettings(item.organization_id, item.provider_key) : null;
+
+  const queuedEvent = db.prepare(`SELECT payload_json FROM events WHERE organization_id = ? AND lead_id = ? AND event_type = 'lead.email_queued' AND json_extract(payload_json, '$.toEmail') = ? AND json_extract(payload_json, '$.subject') = ? ORDER BY created_at DESC LIMIT 1`).get(item.organization_id, item.lead_id, item.to_email, item.subject);
+  const payload = queuedEvent?.payload_json ? safeJsonParse(queuedEvent.payload_json, {}) : {};
+  const emailAccountId = payload?.emailAccountId || null;
+  const emailAccount = emailAccountId ? getEmailAccountById(emailAccountId, item.organization_id) : null;
+
+  if (emailAccount && (item.provider_key === 'imap_smtp' || emailAccount.provider_key === 'imap_smtp')) {
+    providerSettings = {
+      ...(providerSettings || {}),
+      config_json: JSON.stringify(safeJsonParse(emailAccount.config_json || '{}', {})),
+      status: emailAccount.status,
+    };
+  }
+
+  const result = await provider.send({
+    toEmail: item.to_email,
+    subject: item.subject,
+    body: item.body,
+    providerSettings,
+    emailAccount,
+    saveProviderSettings: (patch) => saveProviderSettingsRow(item.organization_id, item.provider_key || 'stub', patch),
+  });
+  const ts = nowIso();
+  const tx = db.transaction(() => {
+    db.prepare(`UPDATE email_outbox SET send_status = 'sent', sent_at = ?, failed_at = NULL, last_error = NULL, updated_at = ? WHERE id = ?`).run(ts, ts, item.id);
+    db.prepare(`INSERT INTO communications (id, organization_id, lead_id, channel, direction, actor_type, actor_name, subject, summary, content, occurred_at, created_at, updated_at) VALUES (?, ?, ?, 'email', 'outbound', 'user', ?, ?, ?, ?, ?, ?, ?)`).run(`com_${crypto.randomUUID()}`, item.organization_id, item.lead_id, actorName, item.subject, 'Email sent from outbox', item.body, ts, ts, ts);
+    db.prepare(`INSERT INTO events (id, organization_id, lead_id, event_type, payload_json, created_at) VALUES (?, ?, ?, 'lead.email_sent', ?, ?)`).run(`evt_${crypto.randomUUID()}`, item.organization_id, item.lead_id, JSON.stringify({ outboxId: item.id, providerKey: item.provider_key || 'stub', providerMessageId: result.providerMessageId || null, emailAccountId: emailAccountId || null, senderEmail: emailAccount?.email_address || null }), ts);
+    db.prepare(`UPDATE leads SET last_contacted_at = ?, updated_at = ? WHERE id = ?`).run(ts, ts, item.lead_id);
+  });
+  tx();
+  return db.prepare(`SELECT o.*, COALESCE(u.full_name, 'System') AS created_by_name, ea.email_address AS sender_email_address, ea.display_name AS sender_display_name FROM email_outbox o LEFT JOIN users u ON u.id = o.created_by_user_id LEFT JOIN events e ON e.organization_id = o.organization_id AND e.lead_id = o.lead_id AND e.event_type = 'lead.email_queued' AND json_extract(e.payload_json, '$.toEmail') = o.to_email AND json_extract(e.payload_json, '$.subject') = o.subject LEFT JOIN email_accounts ea ON ea.id = json_extract(e.payload_json, '$.emailAccountId') WHERE o.id = ? LIMIT 1`).get(item.id);
+}
 
 app.post('/api/email-outbox/:id/process', requirePermission('emailOutbox.manage'), async (req, res) => {
   const orgId = getActorOrgId(req);
   const item = db.prepare(`SELECT * FROM email_outbox WHERE id = ? AND organization_id = ? LIMIT 1`).get(req.params.id, orgId);
   if (!item) return res.status(404).json({ ok: false, error: 'Outbox item not found' });
-  if (item.send_status === 'sent') return res.json({ ok: true, item: { id: item.id, sendStatus: item.send_status, sentAt: item.sent_at } });
+  if (item.send_status === 'sent') return res.json({ ok: true, item: serializeOutboxItem({ ...item, created_by_name: req.actor.full_name }) });
 
-  const provider = getProvider(item.provider_key || 'stub');
   try {
-    const providerSettings = item.provider_key ? getProviderSettings(item.organization_id, item.provider_key) : null;
-    const result = await provider.send({ toEmail: item.to_email, subject: item.subject, body: item.body, providerSettings, saveProviderSettings: (patch) => saveProviderSettingsRow(item.organization_id, item.provider_key || 'stub', patch) });
-    const ts = nowIso();
-    const tx = db.transaction(() => {
-      db.prepare(`UPDATE email_outbox SET send_status = 'sent', sent_at = ?, failed_at = NULL, last_error = NULL, updated_at = ? WHERE id = ?`).run(ts, ts, item.id);
-      db.prepare(`INSERT INTO communications (id, organization_id, lead_id, channel, direction, actor_type, actor_name, subject, summary, content, occurred_at, created_at, updated_at) VALUES (?, ?, ?, 'email', 'outbound', 'user', ?, ?, ?, ?, ?, ?, ?)`).run(`com_${crypto.randomUUID()}`, item.organization_id, item.lead_id, req.actor.full_name, item.subject, 'Email sent from outbox', item.body, ts, ts, ts);
-      db.prepare(`INSERT INTO events (id, organization_id, lead_id, event_type, payload_json, created_at) VALUES (?, ?, ?, 'lead.email_sent', ?, ?)`).run(`evt_${crypto.randomUUID()}`, item.organization_id, item.lead_id, JSON.stringify({ outboxId: item.id, providerKey: item.provider_key || 'stub', providerMessageId: result.providerMessageId || null }), ts);
-      db.prepare(`UPDATE leads SET last_contacted_at = ?, updated_at = ? WHERE id = ?`).run(ts, ts, item.lead_id);
-    });
-    tx();
-    const updated = db.prepare(`SELECT * FROM email_outbox WHERE id = ? LIMIT 1`).get(item.id);
-    res.json({ ok: true, item: { id: updated.id, sendStatus: updated.send_status, sentAt: updated.sent_at, providerKey: updated.provider_key || 'stub' } });
+    const updated = await processOutboxRow(item, req.actor.full_name);
+    res.json({ ok: true, item: serializeOutboxItem(updated) });
   } catch (error) {
     const ts = nowIso();
     db.prepare(`UPDATE email_outbox SET send_status = 'failed', failed_at = ?, last_error = ?, updated_at = ? WHERE id = ?`).run(ts, error?.message || 'Unknown error', ts, item.id);
     res.status(500).json({ ok: false, error: error?.message || 'Email send failed' });
   }
+});
+
+app.post('/api/leads/:id/email-outbox/process', requirePermission('emailOutbox.manage'), async (req, res) => {
+  const orgId = getActorOrgId(req);
+  const rows = db.prepare(`SELECT o.*, COALESCE(u.full_name, 'System') AS created_by_name FROM email_outbox o LEFT JOIN users u ON u.id = o.created_by_user_id WHERE o.organization_id = ? AND o.lead_id = ? AND o.send_status != 'sent' ORDER BY o.created_at ASC`).all(orgId, req.params.id);
+  if (!rows.length) return res.json({ ok: true, processed: [], failed: [], summary: { requested: 0, processed: 0, failed: 0 } });
+
+  const processed = [];
+  const failed = [];
+  for (const item of rows) {
+    try {
+      const updated = await processOutboxRow(item, req.actor.full_name);
+      processed.push(serializeOutboxItem(updated));
+    } catch (error) {
+      const ts = nowIso();
+      db.prepare(`UPDATE email_outbox SET send_status = 'failed', failed_at = ?, last_error = ?, updated_at = ? WHERE id = ?`).run(ts, error?.message || 'Unknown error', ts, item.id);
+      const failedRow = db.prepare(`SELECT o.*, COALESCE(u.full_name, 'System') AS created_by_name, ea.email_address AS sender_email_address, ea.display_name AS sender_display_name FROM email_outbox o LEFT JOIN users u ON u.id = o.created_by_user_id LEFT JOIN events e ON e.organization_id = o.organization_id AND e.lead_id = o.lead_id AND e.event_type = 'lead.email_queued' AND json_extract(e.payload_json, '$.toEmail') = o.to_email AND json_extract(e.payload_json, '$.subject') = o.subject LEFT JOIN email_accounts ea ON ea.id = json_extract(e.payload_json, '$.emailAccountId') WHERE o.id = ? LIMIT 1`).get(item.id);
+      failed.push(serializeOutboxItem(failedRow));
+    }
+  }
+
+  res.json({ ok: true, processed, failed, summary: { requested: rows.length, processed: processed.length, failed: failed.length } });
 });
 
 app.get('/api/settings/business', requirePermission('settings.manageBusiness'), (req, res) => {
@@ -2044,9 +2936,12 @@ app.put('/api/settings/business', requirePermission('settings.manageBusiness'), 
     ).run(`set_${crypto.randomUUID()}`, orgId, BUSINESS_SETTINGS_KEY, JSON.stringify(next), ts, ts);
   }
 
-  db.prepare(`UPDATE organizations SET name = ?, timezone = ?, updated_at = ? WHERE id = ?`).run(
+  const currentOrg = db.prepare(`SELECT * FROM organizations WHERE id = ? LIMIT 1`).get(orgId);
+  const nextSlug = ensureUniqueWorkspaceSlug(next.businessName || currentOrg?.name || orgId, orgId);
+  db.prepare(`UPDATE organizations SET name = ?, timezone = ?, slug = ?, updated_at = ? WHERE id = ?`).run(
     next.businessName,
     next.timezone,
+    nextSlug,
     ts,
     orgId
   );
@@ -2189,4 +3084,13 @@ app.post('/api/templates/first-response/preview', requirePermission('settings.ma
 });
 
 const port = process.env.PORT || 4000;
-app.listen(port, () => console.log(`API listening on :${port}`));
+
+function startServer() {
+  return app.listen(port, () => console.log(`API listening on :${port}`));
+}
+
+if (require.main === module) {
+  startServer();
+}
+
+module.exports = { app, startServer, syncGmailInboundForAccount, syncMicrosoftInboundForAccount, runEmailSyncForAccount, runDueEmailSyncs, claimDueEmailSyncAccounts, getEmailSyncState, upsertEmailSyncState };
