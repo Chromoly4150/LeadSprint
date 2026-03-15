@@ -390,6 +390,83 @@ test('ai settings can be updated and manual lead draft runs are org-scoped', asy
   assert.ok(runsJson.runs.some((run) => run.lead_id === createLeadJson.lead.id && run.status === 'completed'));
 });
 
+test('platform directory scope filters users and organizations correctly', async (t) => {
+  const api = startApi();
+  t.after(api.cleanup);
+
+  await waitForHealth(api.baseUrl);
+
+  const submitRes = await fetch(`${api.baseUrl}/api/public/access/business-request`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      fullName: 'Casey Search',
+      email: 'casey@scopeco.example.com',
+      roleTitle: 'Owner',
+      organizationName: 'ScopeCo Plumbing',
+      website: 'https://scopeco.example.com',
+      lineOfBusiness: 'plumbing',
+      teamSize: '1-5',
+      requestedFeatures: ['lead_intake'],
+      authorityAttestation: true,
+    }),
+  });
+  assert.equal(submitRes.status, 201);
+
+  const requestsRes = await fetch(`${api.baseUrl}/api/admin/access-requests`, {
+    headers: api.authHeaders('/api/admin/access-requests', { email: 'josiahricheson@gmail.com', clerkUserId: 'clerk_platform_owner' }),
+  });
+  const requestsJson = await requestsRes.json();
+  const request = requestsJson.requests.find((row) => row.email === 'casey@scopeco.example.com');
+  assert.ok(request);
+
+  const approveRes = await fetch(`${api.baseUrl}/api/admin/access-requests/${request.id}/approve`, {
+    method: 'POST',
+    headers: api.authHeaders(`/api/admin/access-requests/${request.id}/approve`, {
+      method: 'POST',
+      email: 'josiahricheson@gmail.com',
+      clerkUserId: 'clerk_platform_owner',
+      contentType: 'application/json',
+    }),
+    body: JSON.stringify({ reviewNotes: 'Approved for search scope test' }),
+  });
+  assert.equal(approveRes.status, 200);
+  const approveJson = await approveRes.json();
+  const token = approveJson.request.activationToken;
+  assert.ok(token);
+
+  const meRes = await fetch(`${api.baseUrl}/api/access/me`, {
+    headers: api.authHeaders('/api/access/me', { email: 'casey@scopeco.example.com', clerkUserId: 'clerk_casey_scope' }),
+  });
+  assert.equal(meRes.status, 200);
+
+  const emailScopeRes = await fetch(`${api.baseUrl}/api/platform/directory?q=casey@scopeco.example.com&scope=email`, {
+    headers: api.authHeaders('/api/platform/directory', { email: 'josiahricheson@gmail.com', clerkUserId: 'clerk_platform_owner' }),
+  });
+  assert.equal(emailScopeRes.status, 200);
+  const emailScopeJson = await emailScopeRes.json();
+  assert.equal(emailScopeJson.scope, 'email');
+  assert.ok(emailScopeJson.users.some((user) => user.email === 'casey@scopeco.example.com'));
+  assert.equal(emailScopeJson.organizations.length, 0);
+
+  const companyScopeRes = await fetch(`${api.baseUrl}/api/platform/directory?q=scopeco&scope=company`, {
+    headers: api.authHeaders('/api/platform/directory', { email: 'josiahricheson@gmail.com', clerkUserId: 'clerk_platform_owner' }),
+  });
+  assert.equal(companyScopeRes.status, 200);
+  const companyScopeJson = await companyScopeRes.json();
+  assert.equal(companyScopeJson.scope, 'company');
+  assert.ok(companyScopeJson.organizations.some((org) => org.name === 'ScopeCo Plumbing'));
+  assert.ok(companyScopeJson.users.some((user) => user.organizationName === 'ScopeCo Plumbing'));
+
+  const nameScopeRes = await fetch(`${api.baseUrl}/api/platform/directory?q=casey&scope=name`, {
+    headers: api.authHeaders('/api/platform/directory', { email: 'josiahricheson@gmail.com', clerkUserId: 'clerk_platform_owner' }),
+  });
+  assert.equal(nameScopeRes.status, 200);
+  const nameScopeJson = await nameScopeRes.json();
+  assert.equal(nameScopeJson.scope, 'name');
+  assert.ok(nameScopeJson.users.some((user) => user.fullName === 'Casey Search'));
+});
+
 test('platform owner can create internal platform operators', async (t) => {
   const api = startApi();
   t.after(api.cleanup);

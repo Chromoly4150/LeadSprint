@@ -6,14 +6,15 @@ import { apiFetch } from '../../lib/api';
 import { buildPrimaryNav, isPlatformRole } from '../../lib/surfaces';
 import { createTestOrganizationAction, switchWorkspaceAction } from '../(protected)/settings/actions';
 
-export default async function ControlPage({ searchParams }: { searchParams?: { q?: string } }) {
+export default async function ControlPage({ searchParams }: { searchParams?: { q?: string; scope?: string } }) {
   const meRes = await apiFetch<{ user?: { role?: string; roleLabel?: string; email?: string; platformRoles?: string[] }; workspace?: { slug?: string } | null; workspaces?: Array<{ id: string; name: string; slug?: string; workspaceType?: string; environment?: string; membershipRole?: string; active?: boolean }> }>('/api/access/me');
   if (!meRes.user?.role || !isPlatformRole(meRes.user.role)) redirect('/dashboard');
 
   const query = (searchParams?.q || '').trim();
+  const scope = ['all', 'email', 'name', 'company'].includes(searchParams?.scope || '') ? searchParams?.scope || 'all' : 'all';
   const directoryRes = query
-    ? await apiFetch<{ users: Array<{ id: string; fullName: string; email: string; roleLabel?: string; role: string; organizationId?: string | null; organizationName?: string | null; organizationSlug?: string | null; organizationWorkspaceType?: string | null; organizationEnvironment?: string | null }>; organizations: Array<{ id: string; name: string; slug?: string; workspace_type: string; environment?: string; created_at: string }> }>(`/api/platform/directory?q=${encodeURIComponent(query)}`)
-    : { users: [], organizations: [] };
+    ? await apiFetch<{ users: Array<{ id: string; fullName: string; email: string; roleLabel?: string; role: string; organizationId?: string | null; organizationName?: string | null; organizationSlug?: string | null; organizationWorkspaceType?: string | null; organizationEnvironment?: string | null }>; organizations: Array<{ id: string; name: string; slug?: string; workspace_type: string; environment?: string; created_at: string }>; scope?: string }>(`/api/platform/directory?q=${encodeURIComponent(query)}&scope=${encodeURIComponent(scope)}`)
+    : { users: [], organizations: [], scope };
   const navItems = buildPrimaryNav({ role: meRes.user.role, workspaceSlug: meRes.workspace?.slug });
   const hasResults = directoryRes.users.length > 0 || directoryRes.organizations.length > 0;
 
@@ -46,7 +47,7 @@ export default async function ControlPage({ searchParams }: { searchParams?: { q
     }>
       <section style={{ ...cardStyle, minHeight: 420, display: 'grid', alignContent: 'start', justifyItems: 'center', paddingTop: 48 }}>
         <form method="get" action="/control" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center', width: '100%', maxWidth: 820 }}>
-          <select name="scope" defaultValue="all" style={{ ...inputStyle, minWidth: 180 }}>
+          <select name="scope" defaultValue={scope} style={{ ...inputStyle, minWidth: 180 }}>
             <option value="all">All</option>
             <option value="email">Email</option>
             <option value="name">Name</option>

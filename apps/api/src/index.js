@@ -1736,18 +1736,35 @@ app.post('/api/platform/test-organizations', requirePermission('platform.users.m
 
 app.get('/api/platform/directory', requirePermission('platform.users.manage'), (req, res) => {
   const q = normalizeString(req.query.q || '').toLowerCase();
+  const rawScope = normalizeString(req.query.scope || 'all').toLowerCase();
+  const scope = ['all', 'email', 'name', 'company'].includes(rawScope) ? rawScope : 'all';
   const limit = Math.min(Number(req.query.limit || 25), 100);
 
-  const users = q
-    ? db.prepare(`SELECT u.*, o.id AS organization_id, o.name AS organization_name, o.slug AS organization_slug, o.workspace_type AS organization_workspace_type, o.environment AS organization_environment FROM users u LEFT JOIN organizations o ON o.id = u.organization_id WHERE lower(u.full_name) LIKE ? OR lower(u.email) LIKE ? OR lower(o.name) LIKE ? ORDER BY u.created_at DESC LIMIT ?`).all(`%${q}%`, `%${q}%`, `%${q}%`, limit)
-    : db.prepare(`SELECT u.*, o.id AS organization_id, o.name AS organization_name, o.slug AS organization_slug, o.workspace_type AS organization_workspace_type, o.environment AS organization_environment FROM users u LEFT JOIN organizations o ON o.id = u.organization_id ORDER BY u.created_at DESC LIMIT ?`).all(limit);
+  let users;
+  if (!q) {
+    users = db.prepare(`SELECT u.*, o.id AS organization_id, o.name AS organization_name, o.slug AS organization_slug, o.workspace_type AS organization_workspace_type, o.environment AS organization_environment FROM users u LEFT JOIN organizations o ON o.id = u.organization_id ORDER BY u.created_at DESC LIMIT ?`).all(limit);
+  } else if (scope === 'email') {
+    users = db.prepare(`SELECT u.*, o.id AS organization_id, o.name AS organization_name, o.slug AS organization_slug, o.workspace_type AS organization_workspace_type, o.environment AS organization_environment FROM users u LEFT JOIN organizations o ON o.id = u.organization_id WHERE lower(u.email) LIKE ? ORDER BY u.created_at DESC LIMIT ?`).all(`%${q}%`, limit);
+  } else if (scope === 'name') {
+    users = db.prepare(`SELECT u.*, o.id AS organization_id, o.name AS organization_name, o.slug AS organization_slug, o.workspace_type AS organization_workspace_type, o.environment AS organization_environment FROM users u LEFT JOIN organizations o ON o.id = u.organization_id WHERE lower(u.full_name) LIKE ? ORDER BY u.created_at DESC LIMIT ?`).all(`%${q}%`, limit);
+  } else if (scope === 'company') {
+    users = db.prepare(`SELECT u.*, o.id AS organization_id, o.name AS organization_name, o.slug AS organization_slug, o.workspace_type AS organization_workspace_type, o.environment AS organization_environment FROM users u LEFT JOIN organizations o ON o.id = u.organization_id WHERE lower(o.name) LIKE ? OR lower(COALESCE(o.slug, '')) LIKE ? ORDER BY u.created_at DESC LIMIT ?`).all(`%${q}%`, `%${q}%`, limit);
+  } else {
+    users = db.prepare(`SELECT u.*, o.id AS organization_id, o.name AS organization_name, o.slug AS organization_slug, o.workspace_type AS organization_workspace_type, o.environment AS organization_environment FROM users u LEFT JOIN organizations o ON o.id = u.organization_id WHERE lower(u.full_name) LIKE ? OR lower(u.email) LIKE ? OR lower(o.name) LIKE ? OR lower(COALESCE(o.slug, '')) LIKE ? ORDER BY u.created_at DESC LIMIT ?`).all(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`, limit);
+  }
 
-  const organizations = q
-    ? db.prepare(`SELECT * FROM organizations WHERE lower(name) LIKE ? OR lower(COALESCE(slug, '')) LIKE ? ORDER BY created_at DESC LIMIT ?`).all(`%${q}%`, `%${q}%`, limit)
-    : db.prepare(`SELECT * FROM organizations ORDER BY created_at DESC LIMIT ?`).all(limit);
+  let organizations;
+  if (!q) {
+    organizations = db.prepare(`SELECT * FROM organizations ORDER BY created_at DESC LIMIT ?`).all(limit);
+  } else if (scope === 'email') {
+    organizations = [];
+  } else {
+    organizations = db.prepare(`SELECT * FROM organizations WHERE lower(name) LIKE ? OR lower(COALESCE(slug, '')) LIKE ? ORDER BY created_at DESC LIMIT ?`).all(`%${q}%`, `%${q}%`, limit);
+  }
 
   res.json({
     ok: true,
+    scope,
     users: users.map((row) => ({ ...serializeUser(row), organizationId: row.organization_id || null, organizationName: row.organization_name || null, organizationSlug: row.organization_slug || null, organizationWorkspaceType: row.organization_workspace_type || null, organizationEnvironment: row.organization_environment || 'customer' })),
     organizations: organizations.map((org) => ({ ...org, slug: org.slug || ensureUniqueWorkspaceSlug(org.name || org.id, org.id) })),
   });
