@@ -7,14 +7,14 @@ import { buildPrimaryNav, isPlatformRole } from '../../lib/surfaces';
 import { createTestOrganizationAction } from '../(protected)/settings/actions';
 
 export default async function ControlPage({ searchParams }: { searchParams?: { q?: string } }) {
-  const meRes = await apiFetch<{ actor: { role: string; roleLabel?: string; email: string }; workspace?: { slug?: string }; workspaces?: Array<{ id: string; name: string; slug?: string; workspaceType?: string; environment?: string; membershipRole?: string; active?: boolean }> }>('/api/access/me');
-  if (!isPlatformRole(meRes.actor.role)) redirect('/dashboard');
+  const meRes = await apiFetch<{ user: { role: string; roleLabel?: string; email: string; platformRoles?: string[] }; workspace?: { slug?: string } | null; workspaces?: Array<{ id: string; name: string; slug?: string; workspaceType?: string; environment?: string; membershipRole?: string; active?: boolean }> }>('/api/access/me');
+  if (!isPlatformRole(meRes.user.role)) redirect('/dashboard');
 
   const query = (searchParams?.q || '').trim();
   const directoryRes = query
     ? await apiFetch<{ users: Array<{ id: string; fullName: string; email: string; roleLabel?: string; role: string; organizationName?: string }>; organizations: Array<{ id: string; name: string; slug?: string; workspace_type: string; created_at: string }> }>(`/api/platform/directory?q=${encodeURIComponent(query)}`)
     : { users: [], organizations: [] };
-  const navItems = buildPrimaryNav({ role: meRes.actor.role, workspaceSlug: meRes.workspace?.slug });
+  const navItems = buildPrimaryNav({ role: meRes.user.role, workspaceSlug: meRes.workspace?.slug });
   const hasResults = directoryRes.users.length > 0 || directoryRes.organizations.length > 0;
 
   return (
@@ -28,7 +28,7 @@ export default async function ControlPage({ searchParams }: { searchParams?: { q
           <input name="q" defaultValue={query} placeholder="Search org name, slug, user name, or user email" style={{ ...inputStyle, minWidth: 320 }} />
           <button type="submit">Search</button>
         </form>
-        <p style={{ marginBottom: 0, color: '#6b7280' }}>Authenticated as {meRes.actor.email} · {meRes.actor.roleLabel || meRes.actor.role}</p>
+        <p style={{ marginBottom: 0, color: '#6b7280' }}>Authenticated as {meRes.user.email} · {meRes.user.roleLabel || meRes.user.role}</p>
       </section>
 
       {!query ? (
