@@ -828,19 +828,28 @@ function getResolvedActor(req) {
   const user = getActor(req);
   if (!user) return null;
   const platformRoles = getPlatformRolesForUser(user.id);
-  const activeMembership = getActiveMembershipForUser(user);
+  const memberships = getMembershipsForUser(user.id);
+  const activeMembership = memberships.length
+    ? (user.preferred_workspace_id
+        ? memberships.find((membership) => membership.organization_id === user.preferred_workspace_id)
+        : null) || memberships[0]
+    : null;
 
   if (platformRoles.length > 0) {
+    const preferredWorkspace = user.preferred_workspace_id
+      ? db.prepare(`SELECT id FROM organizations WHERE id = ? LIMIT 1`).get(user.preferred_workspace_id)
+      : null;
+    const resolvedWorkspaceId = preferredWorkspace?.id || activeMembership?.organization_id || user.organization_id;
     return {
       ...user,
       platform_roles: platformRoles,
-      memberships: getMembershipsForUser(user.id),
+      memberships,
       acting_as_user_id: null,
       role: platformRoles[0],
       role_label: getPlatformRoleLabel(platformRoles[0]),
-      organization_id: activeMembership?.organization_id || user.organization_id,
-      active_workspace_id: activeMembership?.organization_id || user.preferred_workspace_id || user.organization_id,
-      active_membership_role: activeMembership?.role || null,
+      organization_id: resolvedWorkspaceId,
+      active_workspace_id: resolvedWorkspaceId,
+      active_membership_role: activeMembership?.organization_id === resolvedWorkspaceId ? activeMembership?.role || null : null,
     };
   }
 
@@ -1240,6 +1249,8 @@ function provisionApprovedRequest(request, reviewedByUserId = null, reviewNotes 
   const tx = db.transaction(() => {
     db.prepare(`INSERT INTO organizations (id, name, timezone, workspace_type, slug, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(orgId, orgName, 'America/New_York', workspaceType, workspaceSlug, ts, ts);
     db.prepare(`INSERT INTO users (id, organization_id, full_name, email, role, status, clerk_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, 'company_owner', 'active', ?, ?, ?)`).run(userId, orgId, fullName, email, request.clerk_user_id || null, ts, ts);
+    db.prepare(`INSERT INTO organization_memberships (id, user_id, organization_id, role, status, created_at, updated_at) VALUES (?, ?, ?, 'owner', 'active', ?, ?)`).run(`mem_${crypto.randomUUID()}`, userId, orgId, ts, ts);
+    db.prepare(`UPDATE users SET preferred_workspace_id = ?, updated_at = ? WHERE id = ?`).run(orgId, ts, userId);
     db.prepare(`INSERT INTO settings (id, organization_id, key, value_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`).run(`set_${crypto.randomUUID()}`, orgId, BUSINESS_SETTINGS_KEY, JSON.stringify({
       businessName: orgName,
       timezone: 'America/New_York',
@@ -1254,6 +1265,30 @@ function provisionApprovedRequest(request, reviewedByUserId = null, reviewNotes 
 
   tx();
   return { organization: { id: orgId, name: orgName, slug: workspaceSlug, workspaceType }, user: { id: userId, email, role: 'company_owner' } };
+}
+
+function createInternalTestOrganizationForActor(actor, nameInput) {
+  const ts = nowIso();
+  const orgName = normalizeString(nameInput) || `Internal Test ${ts.slice(0, 10)}`;
+  const orgId = `org_${crypto.randomUUID()}`;
+  const workspaceSlug = ensureUniqueWorkspaceSlug(orgName || orgId);
+
+  const tx = db.transaction(() => {
+    db.prepare(`INSERT INTO organizations (id, name, timezone, workspace_type, environment, slug, created_at, updated_at) VALUES (?, ?, ?, 'business_verified', 'internal_test', ?, ?, ?, ?)`).run(orgId, orgName, 'America/New_York', workspaceSlug, ts, ts);
+    db.prepare(`INSERT INTO organization_memberships (id, user_id, organization_id, role, status, created_at, updated_at) VALUES (?, ?, ?, 'owner', 'active', ?, ?)`).run(`mem_${crypto.randomUUID()}`, actor.id, orgId, ts, ts);
+    db.prepare(`UPDATE users SET preferred_workspace_id = ?, updated_at = ? WHERE id = ?`).run(orgId, ts, actor.id);
+    db.prepare(`INSERT INTO settings (id, organization_id, key, value_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`).run(`set_${crypto.randomUUID()}`, orgId, BUSINESS_SETTINGS_KEY, JSON.stringify({
+      businessName: orgName,
+      timezone: 'America/New_York',
+      bookingLink: 'https://calendly.com/your-link',
+      hours: defaultBusinessSettings.hours,
+      environment: 'internal_test',
+      createdBy: actor.email || actor.id,
+    }), ts, ts);
+  });
+
+  tx();
+  return { organization: { id: orgId, name: orgName, slug: workspaceSlug, workspaceType: 'business_verified', environment: 'internal_test' } };
 }
 
 function getRoleDisplayLabel(role) {
@@ -1327,7 +1362,8 @@ app.get('/api/access/me', requireIdentity, (req, res) => {
         id: org?.id || actor.organization_id,
         name: org?.name || DEFAULT_ORG_NAME,
         slug: org?.slug || 'platform',
-        workspaceType: 'platform',
+        workspaceType: org?.workspace_type || 'platform',
+        environment: org?.environment || 'customer',
         surface: 'control',
       },
       user: {
@@ -1656,13 +1692,55 @@ app.get('/api/ai/runs/:id', requirePermission('communications.view'), (req, res)
   });
 });
 
+app.post('/api/workspaces/switch', requireAuthenticated, (req, res) => {
+  const workspaceId = normalizeString(req.body?.workspaceId);
+  if (!workspaceId) return res.status(400).json({ ok: false, error: 'workspaceId is required' });
+
+  const memberships = getMembershipsForUser(req.actor.id);
+  const membership = memberships.find((item) => item.organization_id === workspaceId && item.status === 'active');
+  const isPlatformActor = PLATFORM_ROLES.has(req.actor?.role);
+  const targetOrg = db.prepare(`SELECT * FROM organizations WHERE id = ? LIMIT 1`).get(workspaceId);
+
+  if (!membership && (!isPlatformActor || !targetOrg)) {
+    return res.status(403).json({ ok: false, error: 'You do not have access to that workspace' });
+  }
+
+  const ts = nowIso();
+  db.prepare(`UPDATE users SET preferred_workspace_id = ?, updated_at = ? WHERE id = ?`).run(workspaceId, ts, req.actor.id);
+
+  const workspace = membership
+    ? {
+        id: membership.organization_id,
+        name: membership.organization_name,
+        slug: membership.organization_slug || ensureUniqueWorkspaceSlug(membership.organization_name || membership.organization_id, membership.organization_id),
+        workspaceType: membership.workspace_type,
+        environment: membership.environment || 'customer',
+        membershipRole: membership.role,
+      }
+    : {
+        id: targetOrg.id,
+        name: targetOrg.name,
+        slug: targetOrg.slug || ensureUniqueWorkspaceSlug(targetOrg.name || targetOrg.id, targetOrg.id),
+        workspaceType: targetOrg.workspace_type,
+        environment: targetOrg.environment || 'customer',
+        membershipRole: null,
+      };
+
+  res.json({ ok: true, workspace });
+});
+
+app.post('/api/platform/test-organizations', requirePermission('platform.users.manage'), (req, res) => {
+  const created = createInternalTestOrganizationForActor(req.actor, req.body?.name);
+  res.status(201).json({ ok: true, ...created });
+});
+
 app.get('/api/platform/directory', requirePermission('platform.users.manage'), (req, res) => {
   const q = normalizeString(req.query.q || '').toLowerCase();
   const limit = Math.min(Number(req.query.limit || 25), 100);
 
   const users = q
-    ? db.prepare(`SELECT u.*, o.name AS organization_name FROM users u LEFT JOIN organizations o ON o.id = u.organization_id WHERE lower(u.full_name) LIKE ? OR lower(u.email) LIKE ? OR lower(o.name) LIKE ? ORDER BY u.created_at DESC LIMIT ?`).all(`%${q}%`, `%${q}%`, `%${q}%`, limit)
-    : db.prepare(`SELECT u.*, o.name AS organization_name FROM users u LEFT JOIN organizations o ON o.id = u.organization_id ORDER BY u.created_at DESC LIMIT ?`).all(limit);
+    ? db.prepare(`SELECT u.*, o.id AS organization_id, o.name AS organization_name, o.slug AS organization_slug, o.workspace_type AS organization_workspace_type, o.environment AS organization_environment FROM users u LEFT JOIN organizations o ON o.id = u.organization_id WHERE lower(u.full_name) LIKE ? OR lower(u.email) LIKE ? OR lower(o.name) LIKE ? ORDER BY u.created_at DESC LIMIT ?`).all(`%${q}%`, `%${q}%`, `%${q}%`, limit)
+    : db.prepare(`SELECT u.*, o.id AS organization_id, o.name AS organization_name, o.slug AS organization_slug, o.workspace_type AS organization_workspace_type, o.environment AS organization_environment FROM users u LEFT JOIN organizations o ON o.id = u.organization_id ORDER BY u.created_at DESC LIMIT ?`).all(limit);
 
   const organizations = q
     ? db.prepare(`SELECT * FROM organizations WHERE lower(name) LIKE ? OR lower(COALESCE(slug, '')) LIKE ? ORDER BY created_at DESC LIMIT ?`).all(`%${q}%`, `%${q}%`, limit)
@@ -1670,9 +1748,232 @@ app.get('/api/platform/directory', requirePermission('platform.users.manage'), (
 
   res.json({
     ok: true,
-    users: users.map((row) => ({ ...serializeUser(row), organizationName: row.organization_name })),
+    users: users.map((row) => ({ ...serializeUser(row), organizationId: row.organization_id || null, organizationName: row.organization_name || null, organizationSlug: row.organization_slug || null, organizationWorkspaceType: row.organization_workspace_type || null, organizationEnvironment: row.organization_environment || 'customer' })),
     organizations: organizations.map((org) => ({ ...org, slug: org.slug || ensureUniqueWorkspaceSlug(org.name || org.id, org.id) })),
   });
+});
+
+function getPlatformWorkspaceBySlug(slug) {
+  return db.prepare(`SELECT * FROM organizations WHERE slug = ? LIMIT 1`).get(slug);
+}
+
+function getPlatformWorkspaceSummary(org) {
+  const users = db.prepare(`SELECT * FROM users WHERE organization_id = ? ORDER BY role IN ('platform_owner','company_owner') DESC, created_at ASC`).all(org.id);
+  const invitations = db.prepare(`SELECT * FROM user_invitations WHERE organization_id = ? ORDER BY created_at DESC`).all(org.id);
+  const businessRow = db.prepare(`SELECT * FROM settings WHERE organization_id = ? AND key = ? LIMIT 1`).get(org.id, BUSINESS_SETTINGS_KEY);
+  const leads = db.prepare(`SELECT id, full_name, source, status, urgency_status FROM leads WHERE organization_id = ? ORDER BY created_at DESC LIMIT 5`).all(org.id);
+  const aiRuns = db.prepare(`SELECT id, workflow_type, status, mode, provider, model, lead_id, created_at, completed_at, error_message FROM ai_runs WHERE organization_id = ? ORDER BY created_at DESC LIMIT 8`).all(org.id);
+  const communications = db.prepare(`SELECT c.id, c.lead_id, l.full_name AS lead_full_name, c.channel, c.direction, c.actor_type, c.actor_name, c.subject, c.summary, c.occurred_at FROM communications c LEFT JOIN leads l ON l.id = c.lead_id WHERE c.organization_id = ? ORDER BY c.occurred_at DESC, c.created_at DESC LIMIT 12`).all(org.id);
+  const events = db.prepare(`SELECT e.id, e.lead_id, l.full_name AS lead_full_name, e.event_type, e.payload_json, e.created_at FROM events e LEFT JOIN leads l ON l.id = e.lead_id WHERE e.organization_id = ? ORDER BY e.created_at DESC LIMIT 15`).all(org.id);
+  const summary = db.prepare(`
+    SELECT
+      COUNT(*) AS total_leads,
+      SUM(CASE WHEN status = 'new' THEN 1 ELSE 0 END) AS new_leads,
+      SUM(CASE WHEN status = 'contacted' THEN 1 ELSE 0 END) AS contacted_leads,
+      SUM(CASE WHEN status = 'booked' THEN 1 ELSE 0 END) AS booked_leads,
+      SUM(CASE WHEN urgency_status = 'hot' THEN 1 ELSE 0 END) AS hot_leads,
+      SUM(CASE WHEN status IN ('new', 'contacted') THEN 1 ELSE 0 END) AS needs_attention_leads,
+      SUM(CASE WHEN received_at >= datetime('now', '-30 days') THEN 1 ELSE 0 END) AS recent_inbound_30d
+    FROM leads
+    WHERE organization_id = ?
+  `).get(org.id) || {};
+
+  const totalLeads = Number(summary.total_leads || 0);
+  const bookedLeads = Number(summary.booked_leads || 0);
+  const conversionRate = totalLeads ? Math.round((bookedLeads / totalLeads) * 1000) / 10 : 0;
+
+  return {
+    workspace: {
+      id: org.id,
+      name: org.name,
+      slug: org.slug,
+      workspaceType: org.workspace_type,
+      environment: org.environment || 'customer',
+      timezone: org.timezone,
+      createdAt: org.created_at,
+      updatedAt: org.updated_at,
+    },
+    users: users.map(serializeUser),
+    invitations,
+    settings: {
+      business: businessRow ? safeJsonParse(businessRow.value_json, defaultBusinessSettings) : defaultBusinessSettings,
+      businessUpdatedAt: businessRow?.updated_at || null,
+      ai: getAiSettingsForOrg(org.id),
+      aiUpdatedAt: getAiSettingsForOrg(org.id)?.updated_at || null,
+    },
+    summary: {
+      totalLeads,
+      newLeads: Number(summary.new_leads || 0),
+      contactedLeads: Number(summary.contacted_leads || 0),
+      bookedLeads,
+      hotLeads: Number(summary.hot_leads || 0),
+      needsAttentionLeads: Number(summary.needs_attention_leads || 0),
+      recentInbound30d: Number(summary.recent_inbound_30d || 0),
+      conversionRate,
+    },
+    leads: leads.map((lead) => ({ id: lead.id, fullName: lead.full_name, source: lead.source, status: lead.status, urgencyStatus: lead.urgency_status })),
+    activity: {
+      aiRuns: aiRuns.map((run) => ({ id: run.id, workflowType: run.workflow_type, status: run.status, mode: run.mode, provider: run.provider || null, model: run.model || null, leadId: run.lead_id || null, createdAt: run.created_at, completedAt: run.completed_at || null, errorMessage: run.error_message || null })),
+      communications: communications.map((row) => ({ id: row.id, leadId: row.lead_id || null, leadFullName: row.lead_full_name || null, channel: row.channel, direction: row.direction, actorType: row.actor_type, actorName: row.actor_name || 'Unknown', subject: row.subject || null, summary: row.summary || '', occurredAt: row.occurred_at })),
+      events: events.map((row) => ({ id: row.id, leadId: row.lead_id || null, leadFullName: row.lead_full_name || null, eventType: row.event_type, payload: row.payload_json ? safeJsonParse(row.payload_json, null) : null, createdAt: row.created_at })),
+    },
+  };
+}
+
+app.get('/api/platform/workspaces/:slug/summary', requirePermission('platform.users.manage'), (req, res) => {
+  const slug = normalizeString(req.params.slug);
+  if (!slug) return res.status(400).json({ ok: false, error: 'slug is required' });
+
+  const org = getPlatformWorkspaceBySlug(slug);
+  if (!org) return res.status(404).json({ ok: false, error: 'Workspace not found' });
+
+  res.json({ ok: true, ...getPlatformWorkspaceSummary(org) });
+});
+
+app.post('/api/platform/workspaces/:slug/invitations', requirePermission('platform.users.manage'), (req, res) => {
+  const slug = normalizeString(req.params.slug);
+  const org = getPlatformWorkspaceBySlug(slug);
+  if (!org) return res.status(404).json({ ok: false, error: 'Workspace not found' });
+  if (org.workspace_type !== 'business_verified') return res.status(403).json({ ok: false, error: 'Only verified business workspaces can invite users' });
+
+  const email = normalizeString(req.body?.email).toLowerCase();
+  const role = normalizeString(req.body?.role) || 'company_agent';
+  if (!email) return res.status(400).json({ ok: false, error: 'email is required' });
+  if (!['company_admin', 'company_agent', 'admin', 'agent'].includes(role)) return res.status(400).json({ ok: false, error: 'role must be company_admin or company_agent' });
+
+  const existingInvitation = db.prepare(`SELECT * FROM user_invitations WHERE organization_id = ? AND email = ? AND status = 'pending' LIMIT 1`).get(org.id, email);
+  if (existingInvitation) return res.json({ ok: true, invitation: existingInvitation, alreadyPending: true });
+
+  const invitationId = `inv_${crypto.randomUUID()}`;
+  const ts = nowIso();
+  const normalizedRole = role === 'admin' ? 'company_admin' : role === 'agent' ? 'company_agent' : role;
+  db.prepare(`INSERT INTO user_invitations (id, organization_id, email, role, status, invited_by_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)`).run(invitationId, org.id, email, normalizedRole, req.actor.id, ts, ts);
+  const invitation = db.prepare(`SELECT * FROM user_invitations WHERE id = ? LIMIT 1`).get(invitationId);
+  res.status(201).json({ ok: true, invitation });
+});
+
+app.post('/api/platform/invitations/:id/revoke', requirePermission('platform.users.manage'), (req, res) => {
+  const invitation = db.prepare(`SELECT * FROM user_invitations WHERE id = ? LIMIT 1`).get(req.params.id);
+  if (!invitation) return res.status(404).json({ ok: false, error: 'Invitation not found' });
+  if (invitation.status !== 'pending') return res.status(409).json({ ok: false, error: 'Only pending invitations can be revoked' });
+  const ts = nowIso();
+  db.prepare(`UPDATE user_invitations SET status = 'revoked', updated_at = ? WHERE id = ?`).run(ts, invitation.id);
+  res.json({ ok: true, invitation: { ...invitation, status: 'revoked', updated_at: ts } });
+});
+
+app.patch('/api/platform/users/:id', requirePermission('platform.users.manage'), (req, res) => {
+  const existing = db.prepare(`SELECT * FROM users WHERE id = ? LIMIT 1`).get(req.params.id);
+  if (!existing) return res.status(404).json({ ok: false, error: 'User not found' });
+  if (!COMPANY_ROLES.has(existing.role)) return res.status(400).json({ ok: false, error: 'Platform user management endpoint only supports tenant/company users' });
+
+  const fullName = req.body?.fullName == null ? existing.full_name : normalizeString(req.body.fullName);
+  const role = req.body?.role == null ? existing.role : normalizeString(req.body.role).toLowerCase();
+  const status = req.body?.status == null ? existing.status : normalizeString(req.body.status).toLowerCase();
+
+  if (!fullName) return res.status(400).json({ ok: false, error: 'fullName is required' });
+  const normalizedRole = role === 'owner' ? 'company_owner' : role === 'admin' ? 'company_admin' : role === 'agent' ? 'company_agent' : role;
+  if (!COMPANY_ROLES.has(normalizedRole)) return res.status(400).json({ ok: false, error: 'role is invalid for tenant users' });
+  if (!USER_STATUSES.has(status)) return res.status(400).json({ ok: false, error: 'status must be one of active|deactivated|suspended' });
+  if (existing.role === 'company_owner' && normalizedRole !== 'company_owner') return res.status(400).json({ ok: false, error: 'Cannot change role for the company owner' });
+
+  db.prepare(`UPDATE users SET full_name = ?, role = ?, status = ?, updated_at = ? WHERE id = ?`).run(fullName, normalizedRole, status, nowIso(), existing.id);
+  const updated = db.prepare(`SELECT * FROM users WHERE id = ? LIMIT 1`).get(existing.id);
+  res.json({ ok: true, user: serializeUser(updated) });
+});
+
+app.put('/api/platform/workspaces/:slug/business-settings', requirePermission('platform.users.manage'), (req, res) => {
+  const slug = normalizeString(req.params.slug);
+  const org = getPlatformWorkspaceBySlug(slug);
+  if (!org) return res.status(404).json({ ok: false, error: 'Workspace not found' });
+
+  const current = db.prepare(`SELECT * FROM settings WHERE organization_id = ? AND key = ? LIMIT 1`).get(org.id, BUSINESS_SETTINGS_KEY);
+  const incoming = req.body || {};
+  const existingSettings = current ? safeJsonParse(current.value_json, defaultBusinessSettings) : defaultBusinessSettings;
+  const next = {
+    ...existingSettings,
+    businessName: normalizeString(incoming.businessName) || org.name || DEFAULT_ORG_NAME,
+    timezone: normalizeString(incoming.timezone) || org.timezone || 'America/New_York',
+    bookingLink: normalizeString(incoming.bookingLink) || existingSettings.bookingLink || 'https://calendly.com/your-link',
+    lineOfBusiness: normalizeString(incoming.lineOfBusiness) || existingSettings.lineOfBusiness || '',
+    requestKind: normalizeString(incoming.requestKind) || existingSettings.requestKind || org.workspace_type || '',
+    onboardingNotes: normalizeString(incoming.onboardingNotes) || existingSettings.onboardingNotes || '',
+    hours: incoming.hours && typeof incoming.hours === 'object' ? incoming.hours : (existingSettings.hours || defaultBusinessSettings.hours),
+  };
+
+  const ts = nowIso();
+  if (current) {
+    db.prepare(`UPDATE settings SET value_json = ?, updated_at = ? WHERE id = ?`).run(JSON.stringify(next), ts, current.id);
+  } else {
+    db.prepare(`INSERT INTO settings (id, organization_id, key, value_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`).run(`set_${crypto.randomUUID()}`, org.id, BUSINESS_SETTINGS_KEY, JSON.stringify(next), ts, ts);
+  }
+
+  const nextSlug = ensureUniqueWorkspaceSlug(next.businessName || org.name || org.id, org.id);
+  db.prepare(`UPDATE organizations SET name = ?, timezone = ?, slug = ?, updated_at = ? WHERE id = ?`).run(next.businessName, next.timezone, nextSlug, ts, org.id);
+  const updatedOrg = db.prepare(`SELECT * FROM organizations WHERE id = ? LIMIT 1`).get(org.id);
+  res.json({ ok: true, updatedAt: ts, workspace: { id: updatedOrg.id, name: updatedOrg.name, slug: updatedOrg.slug, workspaceType: updatedOrg.workspace_type, environment: updatedOrg.environment || 'customer', timezone: updatedOrg.timezone }, settings: next });
+});
+
+app.put('/api/platform/workspaces/:slug/ai-settings', requirePermission('platform.users.manage'), (req, res) => {
+  const slug = normalizeString(req.params.slug);
+  const org = getPlatformWorkspaceBySlug(slug);
+  if (!org) return res.status(404).json({ ok: false, error: 'Workspace not found' });
+
+  const current = getAiSettingsForOrg(org.id);
+  const incoming = req.body || {};
+  const next = {
+    ai_enabled: Boolean(incoming.aiEnabled),
+    default_mode: ['draft_only', 'approval_required', 'guarded_autopilot'].includes(incoming.defaultMode) ? incoming.defaultMode : (current?.default_mode || 'draft_only'),
+    allowed_channels_json: JSON.stringify(Array.isArray(incoming.allowedChannels) ? incoming.allowedChannels : (current?.allowed_channels || ['email', 'sms'])),
+    allowed_actions_json: JSON.stringify(Array.isArray(incoming.allowedActions) ? incoming.allowedActions : (current?.allowed_actions || ['draft_message'])),
+    response_sla_target_minutes: Math.max(1, Number(incoming.responseSlaTargetMinutes || current?.response_sla_target_minutes || 5)),
+    tone_profile_json: JSON.stringify(incoming.toneProfile && typeof incoming.toneProfile === 'object' ? incoming.toneProfile : (current?.tone_profile || { defaultTone: 'professional and warm' })),
+    business_context_json: JSON.stringify(incoming.businessContext && typeof incoming.businessContext === 'object' ? incoming.businessContext : (current?.business_context || {})),
+    compliance_policy_json: JSON.stringify(incoming.compliancePolicy && typeof incoming.compliancePolicy === 'object' ? incoming.compliancePolicy : (current?.compliance_policy || {})),
+    usage_plan: normalizeString(incoming.usagePlan) || current?.usage_plan || 'standard',
+    monthly_message_limit: Math.max(1, Number(incoming.monthlyMessageLimit || current?.monthly_message_limit || 250)),
+    monthly_ai_token_budget: Math.max(1000, Number(incoming.monthlyAiTokenBudget || current?.monthly_ai_token_budget || 250000)),
+    model_policy_json: JSON.stringify(incoming.modelPolicy && typeof incoming.modelPolicy === 'object' ? incoming.modelPolicy : (current?.model_policy || { primaryProvider: 'stub', primaryModel: 'stub/draft-v1', allowedModels: ['stub/draft-v1'] })),
+  };
+  const ts = nowIso();
+  if (current) {
+    db.prepare(`UPDATE organization_ai_settings SET ai_enabled = ?, default_mode = ?, allowed_channels_json = ?, allowed_actions_json = ?, response_sla_target_minutes = ?, tone_profile_json = ?, business_context_json = ?, compliance_policy_json = ?, usage_plan = ?, monthly_message_limit = ?, monthly_ai_token_budget = ?, model_policy_json = ?, updated_at = ? WHERE organization_id = ?`).run(
+      next.ai_enabled ? 1 : 0,
+      next.default_mode,
+      next.allowed_channels_json,
+      next.allowed_actions_json,
+      next.response_sla_target_minutes,
+      next.tone_profile_json,
+      next.business_context_json,
+      next.compliance_policy_json,
+      next.usage_plan,
+      next.monthly_message_limit,
+      next.monthly_ai_token_budget,
+      next.model_policy_json,
+      ts,
+      org.id,
+    );
+  } else {
+    db.prepare(`INSERT INTO organization_ai_settings (id, organization_id, ai_enabled, default_mode, allowed_channels_json, allowed_actions_json, response_sla_target_minutes, tone_profile_json, business_context_json, compliance_policy_json, usage_plan, monthly_message_limit, monthly_ai_token_budget, model_policy_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      `aiset_${crypto.randomUUID()}`,
+      org.id,
+      next.ai_enabled ? 1 : 0,
+      next.default_mode,
+      next.allowed_channels_json,
+      next.allowed_actions_json,
+      next.response_sla_target_minutes,
+      next.tone_profile_json,
+      next.business_context_json,
+      next.compliance_policy_json,
+      next.usage_plan,
+      next.monthly_message_limit,
+      next.monthly_ai_token_budget,
+      next.model_policy_json,
+      ts,
+      ts,
+    );
+  }
+
+  res.json({ ok: true, updatedAt: ts, settings: getAiSettingsForOrg(org.id) });
 });
 
 app.get('/api/admin/access-requests', requirePermission('platform.accessRequests.review'), (req, res) => {
@@ -2463,10 +2764,6 @@ app.post('/api/leads/:id/email-drafts', requirePermission('emailDrafts.manage'),
   const subject = normalizeString(req.body?.subject);
   const body = normalizeString(req.body?.body);
   const source = normalizeString(req.body?.source || 'manual').toLowerCase();
-  if (!providerKey) {
-    const defaultAccount = getDefaultEmailAccountForOrg(orgId, req.actor);
-    providerKey = defaultAccount?.provider_key || 'stub';
-  }
 
   if (!toEmail) return res.status(400).json({ ok: false, error: 'toEmail is required' });
   if (!subject) return res.status(400).json({ ok: false, error: 'subject is required' });

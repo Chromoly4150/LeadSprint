@@ -121,6 +121,46 @@ test('lead intake + list + detail + status happy path', async (t) => {
   assert.equal(statusJson.lead.status, 'contacted');
 });
 
+test('email draft creation works for authenticated owner', async (t) => {
+  const api = startApi();
+  t.after(api.cleanup);
+
+  await waitForHealth(api.baseUrl);
+
+  const intake = await fetch(`${api.baseUrl}/api/leads/intake`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      fullName: 'Drafty McDraftface',
+      email: 'drafty@example.com',
+      source: 'website',
+      message: 'Need follow-up',
+    }),
+  });
+  assert.equal(intake.status, 201);
+  const intakeJson = await intake.json();
+  const leadId = intakeJson.lead.id;
+
+  const draftRes = await fetch(`${api.baseUrl}/api/leads/${leadId}/email-drafts`, {
+    method: 'POST',
+    headers: api.authHeaders(`/api/leads/${leadId}/email-drafts`, {
+      method: 'POST',
+      email: 'owner@leadsprint.local',
+      clerkUserId: 'clerk_owner',
+      contentType: 'application/json',
+    }),
+    body: JSON.stringify({
+      subject: 'Quick follow-up',
+      body: 'Wanted to follow up on your request.',
+    }),
+  });
+  assert.equal(draftRes.status, 201);
+  const draftJson = await draftRes.json();
+  assert.equal(draftJson.ok, true);
+  assert.equal(draftJson.draft.toEmail, 'drafty@example.com');
+  assert.equal(draftJson.draft.subject, 'Quick follow-up');
+});
+
 test('lead intake validation returns 400 for invalid payload', async (t) => {
   const api = startApi();
   t.after(api.cleanup);

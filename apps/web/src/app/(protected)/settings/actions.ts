@@ -4,11 +4,12 @@ import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { internalApiFetch } from '../../../lib/api/internal-api';
 
-function settingsRedirect(message?: string, error?: string) {
+function settingsRedirect(message?: string, error?: string, returnTo?: string) {
   const params = new URLSearchParams();
   if (message) params.set('message', message);
   if (error) params.set('error', error);
-  redirect(`/settings${params.size ? `?${params.toString()}` : ''}`);
+  const target = returnTo || '/settings';
+  redirect(`${target}${params.size ? `${target.includes('?') ? '&' : '?'}${params.toString()}` : ''}`);
 }
 
 export async function approveAccessRequestAction(formData: FormData) {
@@ -61,18 +62,21 @@ export async function followUpBusinessRequestAction(formData: FormData) {
 
 export async function createInvitationAction(formData: FormData) {
   const organizationId = String(formData.get('organizationId') || '');
+  const workspaceSlug = String(formData.get('workspaceSlug') || '').trim();
   const email = String(formData.get('email') || '').trim();
   const role = String(formData.get('role') || 'company_agent').trim();
-  if (!organizationId || !email) return;
+  const returnTo = String(formData.get('returnTo') || '').trim();
+  if ((!organizationId && !workspaceSlug) || !email) return;
   try {
-    await internalApiFetch(`/api/organizations/${organizationId}/invitations`, {
+    await internalApiFetch(workspaceSlug ? `/api/platform/workspaces/${encodeURIComponent(workspaceSlug)}/invitations` : `/api/organizations/${organizationId}/invitations`, {
       method: 'POST',
       body: JSON.stringify({ email, role }),
     });
     revalidatePath('/settings');
-    settingsRedirect('Invitation created.');
+    revalidatePath('/control');
+    settingsRedirect('Invitation created.', undefined, returnTo);
   } catch (error) {
-    settingsRedirect(undefined, error instanceof Error ? error.message : 'Could not create invitation.');
+    settingsRedirect(undefined, error instanceof Error ? error.message : 'Could not create invitation.', returnTo);
   }
 }
 
@@ -98,16 +102,19 @@ export async function updateUserAction(formData: FormData) {
   const fullName = String(formData.get('fullName') || '').trim();
   const role = String(formData.get('role') || '').trim();
   const status = String(formData.get('status') || '').trim();
+  const returnTo = String(formData.get('returnTo') || '').trim();
+  const workspaceSlug = String(formData.get('workspaceSlug') || '').trim();
   if (!userId || !fullName || !role || !status) return;
   try {
-    await internalApiFetch(`/api/users/${userId}`, {
+    await internalApiFetch(workspaceSlug ? `/api/platform/users/${userId}` : `/api/users/${userId}`, {
       method: 'PATCH',
       body: JSON.stringify({ fullName, role, status }),
     });
     revalidatePath('/settings');
-    settingsRedirect('User updated.');
+    revalidatePath('/control');
+    settingsRedirect('User updated.', undefined, returnTo);
   } catch (error) {
-    settingsRedirect(undefined, error instanceof Error ? error.message : 'Could not update user.');
+    settingsRedirect(undefined, error instanceof Error ? error.message : 'Could not update user.', returnTo);
   }
 }
 
@@ -175,15 +182,18 @@ export async function updatePermissionOverridesAction(formData: FormData) {
 
 export async function revokeInvitationAction(formData: FormData) {
   const invitationId = String(formData.get('invitationId') || '').trim();
+  const returnTo = String(formData.get('returnTo') || '').trim();
+  const workspaceSlug = String(formData.get('workspaceSlug') || '').trim();
   if (!invitationId) return;
   try {
-    await internalApiFetch(`/api/invitations/${invitationId}/revoke`, {
+    await internalApiFetch(workspaceSlug ? `/api/platform/invitations/${invitationId}/revoke` : `/api/invitations/${invitationId}/revoke`, {
       method: 'POST',
     });
     revalidatePath('/settings');
-    settingsRedirect('Invitation revoked.');
+    revalidatePath('/control');
+    settingsRedirect('Invitation revoked.', undefined, returnTo);
   } catch (error) {
-    settingsRedirect(undefined, error instanceof Error ? error.message : 'Could not revoke invitation.');
+    settingsRedirect(undefined, error instanceof Error ? error.message : 'Could not revoke invitation.', returnTo);
   }
 }
 
@@ -200,6 +210,8 @@ export async function bootstrapGmailProviderAction() {
 }
 
 export async function updateAiSettingsAction(formData: FormData) {
+  const workspaceSlug = String(formData.get('workspaceSlug') || '').trim();
+  const returnTo = String(formData.get('returnTo') || '').trim();
   const aiEnabled = formData.get('aiEnabled') === 'on';
   const defaultMode = String(formData.get('defaultMode') || 'draft_only');
   const responseSlaTargetMinutes = Number(formData.get('responseSlaTargetMinutes') || 5);
@@ -216,7 +228,7 @@ export async function updateAiSettingsAction(formData: FormData) {
   const primaryModel = String(formData.get('primaryModel') || (primaryProvider === 'stub' ? 'stub/draft-v1' : 'gpt-4o-mini')).trim();
 
   try {
-    await internalApiFetch('/api/settings/ai', {
+    await internalApiFetch(workspaceSlug ? `/api/platform/workspaces/${encodeURIComponent(workspaceSlug)}/ai-settings` : '/api/settings/ai', {
       method: 'PUT',
       body: JSON.stringify({
         aiEnabled,
@@ -234,9 +246,32 @@ export async function updateAiSettingsAction(formData: FormData) {
       }),
     });
     revalidatePath('/settings');
-    settingsRedirect('AI settings saved.');
+    revalidatePath('/control');
+    settingsRedirect('AI settings saved.', undefined, returnTo);
   } catch (error) {
-    settingsRedirect(undefined, error instanceof Error ? error.message : 'Could not save AI settings.');
+    settingsRedirect(undefined, error instanceof Error ? error.message : 'Could not save AI settings.', returnTo);
+  }
+}
+
+export async function updatePlatformWorkspaceBusinessSettingsAction(formData: FormData) {
+  const workspaceSlug = String(formData.get('workspaceSlug') || '').trim();
+  const returnTo = String(formData.get('returnTo') || '').trim();
+  const businessName = String(formData.get('businessName') || '').trim();
+  const timezone = String(formData.get('timezone') || '').trim();
+  const bookingLink = String(formData.get('bookingLink') || '').trim();
+  const lineOfBusiness = String(formData.get('lineOfBusiness') || '').trim();
+  const requestKind = String(formData.get('requestKind') || '').trim();
+  const onboardingNotes = String(formData.get('onboardingNotes') || '').trim();
+  if (!workspaceSlug) return;
+  try {
+    await internalApiFetch(`/api/platform/workspaces/${encodeURIComponent(workspaceSlug)}/business-settings`, {
+      method: 'PUT',
+      body: JSON.stringify({ businessName, timezone, bookingLink, lineOfBusiness, requestKind, onboardingNotes }),
+    });
+    revalidatePath('/control');
+    settingsRedirect('Business settings saved.', undefined, returnTo);
+  } catch (error) {
+    settingsRedirect(undefined, error instanceof Error ? error.message : 'Could not save business settings.', returnTo);
   }
 }
 
@@ -438,6 +473,7 @@ export async function updateEmailSyncModeAction(formData: FormData) {
 
 export async function switchWorkspaceAction(formData: FormData) {
   const workspaceId = String(formData.get('workspaceId') || '').trim();
+  const returnTo = String(formData.get('returnTo') || '').trim();
   if (!workspaceId) return;
   try {
     await internalApiFetch('/api/workspaces/switch', {
@@ -447,7 +483,7 @@ export async function switchWorkspaceAction(formData: FormData) {
     revalidatePath('/control');
     revalidatePath('/workspace');
     revalidatePath('/dashboard');
-    redirect('/dashboard');
+    redirect(returnTo || '/dashboard');
   } catch (error) {
     settingsRedirect(undefined, error instanceof Error ? error.message : 'Could not switch workspace.');
   }
@@ -456,13 +492,13 @@ export async function switchWorkspaceAction(formData: FormData) {
 export async function createTestOrganizationAction(formData: FormData) {
   const name = String(formData.get('name') || '').trim();
   try {
-    const res = await internalApiFetch<{ organization: { slug?: string } }>('/api/platform/test-organizations', {
+    await internalApiFetch('/api/platform/test-organizations', {
       method: 'POST',
       body: JSON.stringify({ name: name || undefined }),
     });
     revalidatePath('/control');
     revalidatePath('/workspace');
-    redirect(res.organization?.slug ? `/workspace/${res.organization.slug}` : '/dashboard');
+    redirect('/control');
   } catch (error) {
     settingsRedirect(undefined, error instanceof Error ? error.message : 'Could not create test organization.');
   }

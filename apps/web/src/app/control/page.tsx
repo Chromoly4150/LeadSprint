@@ -1,9 +1,10 @@
+import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { AppShell, cardStyle, inputStyle } from '../../components/app-shell';
 import { WorkspaceSwitcher } from '../../components/workspace-switcher';
 import { apiFetch } from '../../lib/api';
 import { buildPrimaryNav, isPlatformRole } from '../../lib/surfaces';
-import { createTestOrganizationAction } from '../(protected)/settings/actions';
+import { createTestOrganizationAction, switchWorkspaceAction } from '../(protected)/settings/actions';
 
 export default async function ControlPage({ searchParams }: { searchParams?: { q?: string } }) {
   const meRes = await apiFetch<{ user?: { role?: string; roleLabel?: string; email?: string; platformRoles?: string[] }; workspace?: { slug?: string } | null; workspaces?: Array<{ id: string; name: string; slug?: string; workspaceType?: string; environment?: string; membershipRole?: string; active?: boolean }> }>('/api/access/me');
@@ -11,7 +12,7 @@ export default async function ControlPage({ searchParams }: { searchParams?: { q
 
   const query = (searchParams?.q || '').trim();
   const directoryRes = query
-    ? await apiFetch<{ users: Array<{ id: string; fullName: string; email: string; roleLabel?: string; role: string; organizationName?: string }>; organizations: Array<{ id: string; name: string; slug?: string; workspace_type: string; created_at: string }> }>(`/api/platform/directory?q=${encodeURIComponent(query)}`)
+    ? await apiFetch<{ users: Array<{ id: string; fullName: string; email: string; roleLabel?: string; role: string; organizationId?: string | null; organizationName?: string | null; organizationSlug?: string | null; organizationWorkspaceType?: string | null; organizationEnvironment?: string | null }>; organizations: Array<{ id: string; name: string; slug?: string; workspace_type: string; environment?: string; created_at: string }> }>(`/api/platform/directory?q=${encodeURIComponent(query)}`)
     : { users: [], organizations: [] };
   const navItems = buildPrimaryNav({ role: meRes.user.role, workspaceSlug: meRes.workspace?.slug });
   const hasResults = directoryRes.users.length > 0 || directoryRes.organizations.length > 0;
@@ -65,12 +66,28 @@ export default async function ControlPage({ searchParams }: { searchParams?: { q
             <article style={{ ...cardStyle, width: '100%' }}>
               <h2 style={{ marginTop: 0 }}>Organizations</h2>
               <div style={{ display: 'grid', gap: 8 }}>
-                {directoryRes.organizations.map((org) => (
-                  <div key={org.id} style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 10 }}>
-                    <div style={{ fontWeight: 700 }}>{org.name}</div>
-                    <div style={{ color: '#6b7280', fontSize: 12 }}>{org.workspace_type} · slug: {org.slug || '—'}</div>
-                  </div>
-                ))}
+                {directoryRes.organizations.map((org) => {
+                  const isActive = (meRes.workspaces || []).some((workspace) => workspace.id === org.id && workspace.active);
+                  return (
+                    <div key={org.id} style={{ border: isActive ? '1px solid #2563eb' : '1px solid #e5e7eb', borderRadius: 10, padding: 10, display: 'grid', gap: 8 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+                        <div>
+                          <div style={{ fontWeight: 700 }}>{org.name}</div>
+                          <div style={{ color: '#6b7280', fontSize: 12 }}>{org.workspace_type} · {org.environment || 'customer'} · slug: {org.slug || '—'}</div>
+                        </div>
+                        <div style={{ fontSize: 12, color: isActive ? '#2563eb' : '#6b7280', fontWeight: 700 }}>{isActive ? 'Active workspace' : 'Tenant workspace'}</div>
+                      </div>
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        <form action={switchWorkspaceAction} style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                          <input type="hidden" name="workspaceId" value={org.id} />
+                          <input type="hidden" name="returnTo" value={org.slug ? `/control/workspaces/${org.slug}` : '/control'} />
+                          <button type="submit">Set active workspace</button>
+                        </form>
+                        {org.slug ? <Link href={`/control/workspaces/${org.slug}`} style={{ padding: '8px 12px', borderRadius: 10, textDecoration: 'none', background: '#e5e7eb', color: '#111827', fontWeight: 600 }}>Open tenant</Link> : null}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </article>
           ) : null}
@@ -79,13 +96,27 @@ export default async function ControlPage({ searchParams }: { searchParams?: { q
             <article style={{ ...cardStyle, width: '100%' }}>
               <h2 style={{ marginTop: 0 }}>Users</h2>
               <div style={{ display: 'grid', gap: 8 }}>
-                {directoryRes.users.map((user) => (
-                  <div key={user.id} style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 10 }}>
-                    <div style={{ fontWeight: 700 }}>{user.fullName}</div>
-                    <div style={{ color: '#6b7280', fontSize: 13 }}>{user.email}</div>
-                    <div style={{ color: '#6b7280', fontSize: 12 }}>{user.roleLabel || user.role} · {user.organizationName || 'No org'}</div>
-                  </div>
-                ))}
+                {directoryRes.users.map((user) => {
+                  const isActive = user.organizationId ? (meRes.workspaces || []).some((workspace) => workspace.id === user.organizationId && workspace.active) : false;
+                  return (
+                    <div key={user.id} style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 10, display: 'grid', gap: 8 }}>
+                      <div style={{ fontWeight: 700 }}>{user.fullName}</div>
+                      <div style={{ color: '#6b7280', fontSize: 13 }}>{user.email}</div>
+                      <div style={{ color: '#6b7280', fontSize: 12 }}>{user.roleLabel || user.role} · {user.organizationName || 'No org'}</div>
+                      {user.organizationId ? (
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                          <div style={{ color: '#6b7280', fontSize: 12 }}>{user.organizationWorkspaceType || 'workspace'} · {user.organizationEnvironment || 'customer'} · slug: {user.organizationSlug || '—'}</div>
+                          <form action={switchWorkspaceAction}>
+                            <input type="hidden" name="workspaceId" value={user.organizationId} />
+                            <input type="hidden" name="returnTo" value={user.organizationSlug ? `/control/workspaces/${user.organizationSlug}` : '/control'} />
+                            <button type="submit">{isActive ? 'Active workspace' : 'Set org active'}</button>
+                          </form>
+                          {user.organizationSlug ? <Link href={`/control/workspaces/${user.organizationSlug}`} style={{ padding: '8px 12px', borderRadius: 10, textDecoration: 'none', background: '#e5e7eb', color: '#111827', fontWeight: 600 }}>Open tenant</Link> : null}
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
               </div>
             </article>
           ) : null}
