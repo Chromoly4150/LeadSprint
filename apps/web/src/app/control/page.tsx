@@ -1,11 +1,13 @@
 import { redirect } from 'next/navigation';
 import Link from 'next/link';
 import { AppShell, cardStyle, inputStyle } from '../../components/app-shell';
+import { WorkspaceSwitcher } from '../../components/workspace-switcher';
 import { apiFetch } from '../../lib/api';
 import { buildPrimaryNav, isPlatformRole } from '../../lib/surfaces';
+import { createTestOrganizationAction } from '../(protected)/settings/actions';
 
 export default async function ControlPage({ searchParams }: { searchParams?: { q?: string } }) {
-  const meRes = await apiFetch<{ actor: { role: string; roleLabel?: string; email: string }; workspace?: { slug?: string } }>('/api/me/permissions');
+  const meRes = await apiFetch<{ actor: { role: string; roleLabel?: string; email: string }; workspace?: { slug?: string }; workspaces?: Array<{ id: string; name: string; slug?: string; workspaceType?: string; environment?: string; membershipRole?: string; active?: boolean }> }>('/api/access/me');
   if (!isPlatformRole(meRes.actor.role)) redirect('/dashboard');
 
   const query = (searchParams?.q || '').trim();
@@ -16,8 +18,12 @@ export default async function ControlPage({ searchParams }: { searchParams?: { q
   const hasResults = directoryRes.users.length > 0 || directoryRes.organizations.length > 0;
 
   return (
-    <AppShell title="Platform control plane" subtitle="Search for organizations or users, then open the specific entity you want to inspect." navItems={navItems}>
+    <AppShell title="Platform control plane" subtitle="Search for organizations or users, then open the specific entity you want to inspect." navItems={navItems} headerExtra={<WorkspaceSwitcher workspaces={meRes.workspaces || []} />}>
       <section style={{ ...cardStyle, marginBottom: 16 }}>
+        <form action={createTestOrganizationAction} style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+          <input name="name" placeholder="Create internal test org" style={{ ...inputStyle, minWidth: 280 }} />
+          <button type="submit">Create test organization</button>
+        </form>
         <form method="get" action="/control" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <input name="q" defaultValue={query} placeholder="Search org name, slug, user name, or user email" style={{ ...inputStyle, minWidth: 320 }} />
           <button type="submit">Search</button>

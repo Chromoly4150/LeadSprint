@@ -435,3 +435,35 @@ export async function updateEmailSyncModeAction(formData: FormData) {
     settingsRedirect(undefined, error instanceof Error ? error.message : 'Could not update email sync mode.');
   }
 }
+
+export async function switchWorkspaceAction(formData: FormData) {
+  const workspaceId = String(formData.get('workspaceId') || '').trim();
+  if (!workspaceId) return;
+  try {
+    await internalApiFetch('/api/workspaces/switch', {
+      method: 'POST',
+      body: JSON.stringify({ workspaceId }),
+    });
+    revalidatePath('/control');
+    revalidatePath('/workspace');
+    revalidatePath('/dashboard');
+    redirect('/dashboard');
+  } catch (error) {
+    settingsRedirect(undefined, error instanceof Error ? error.message : 'Could not switch workspace.');
+  }
+}
+
+export async function createTestOrganizationAction(formData: FormData) {
+  const name = String(formData.get('name') || '').trim();
+  try {
+    const res = await internalApiFetch<{ organization: { slug?: string } }>('/api/platform/test-organizations', {
+      method: 'POST',
+      body: JSON.stringify({ name: name || undefined }),
+    });
+    revalidatePath('/control');
+    revalidatePath('/workspace');
+    redirect(res.organization?.slug ? `/workspace/${res.organization.slug}` : '/dashboard');
+  } catch (error) {
+    settingsRedirect(undefined, error instanceof Error ? error.message : 'Could not create test organization.');
+  }
+}

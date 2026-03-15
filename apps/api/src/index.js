@@ -28,8 +28,8 @@ const DEFAULT_ORG_ID = process.env.DEFAULT_ORG_ID || 'org_default';
 const DEFAULT_ORG_NAME = process.env.DEFAULT_ORG_NAME || 'Default Organization';
 const FIRST_RESPONSE_TEMPLATE_KEY = 'first_response';
 const BUSINESS_SETTINGS_KEY = 'business_profile';
-const USER_ROLES = new Set(['platform_owner', 'platform_admin', 'platform_sme', 'platform_agent', 'company_owner', 'company_admin', 'company_agent']);
-const PLATFORM_ROLES = new Set(['platform_owner', 'platform_admin', 'platform_sme', 'platform_agent']);
+const USER_ROLES = new Set(['platform_owner', 'platform_admin', 'platform_sme', 'platform_agent', 'platform_support', 'platform_operator', 'company_owner', 'company_admin', 'company_agent']);
+const PLATFORM_ROLES = new Set(['platform_owner', 'platform_admin', 'platform_sme', 'platform_agent', 'platform_support', 'platform_operator']);
 const COMPANY_ROLES = new Set(['company_owner', 'company_admin', 'company_agent']);
 const USER_STATUSES = new Set(['active', 'deactivated', 'suspended']);
 const LEAD_STATUSES = new Set(['new', 'contacted', 'booked', 'closed']);
@@ -751,12 +751,16 @@ function ensureBootstrapActor(identity) {
     const ts = nowIso();
     const id = `usr_${crypto.randomUUID()}`;
     db.prepare(`INSERT INTO users (id, organization_id, full_name, email, role, status, clerk_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, 'platform_owner', 'active', ?, ?, ?)`).run(id, DEFAULT_ORG_ID, platformOwnerName, email, identity?.clerkUserId || null, ts, ts);
+    db.prepare(`INSERT OR IGNORE INTO platform_roles (id, user_id, role, created_at, updated_at) VALUES (?, ?, 'platform_admin', ?, ?)`).run(`prol_${crypto.randomUUID()}`, id, ts, ts);
     actor = db.prepare(`SELECT * FROM users WHERE id = ? LIMIT 1`).get(id);
   }
 
-  if (actor && actor.email.toLowerCase() === platformOwnerEmail && actor.role !== 'platform_owner') {
-    db.prepare(`UPDATE users SET role = 'platform_owner', updated_at = ? WHERE id = ?`).run(nowIso(), actor.id);
-    actor = { ...actor, role: 'platform_owner' };
+  if (actor && actor.email.toLowerCase() === platformOwnerEmail) {
+    if (actor.role !== 'platform_owner') {
+      db.prepare(`UPDATE users SET role = 'platform_owner', updated_at = ? WHERE id = ?`).run(nowIso(), actor.id);
+      actor = { ...actor, role: 'platform_owner' };
+    }
+    db.prepare(`INSERT OR IGNORE INTO platform_roles (id, user_id, role, created_at, updated_at) VALUES (?, ?, 'platform_admin', ?, ?)`).run(`prol_${crypto.randomUUID()}`, actor.id, nowIso(), nowIso());
   }
 
   if (actor && identity?.clerkUserId && !actor.clerk_user_id) {
@@ -782,6 +786,84 @@ function getActor(req) {
   return ensureBootstrapActor(identity) || db
     .prepare(`SELECT * FROM users WHERE organization_id = ? AND email = ? LIMIT 1`)
     .get(DEFAULT_ORG_ID, identity.email);
+}
+
+function getMembershipsForUser(userId) {
+  return db.prepare(`SELECT m.*, o.name AS organization_name, o.slug AS organization_slug, o.workspace_type, o.environment FROM organization_memberships m JOIN organizations o ON o.id = m.organization_id WHERE m.user_id = ? AND m.status = 'active' ORDER BY m.created_at ASC`).all(userId);
+}
+
+function getPlatformRolesForUser(userId) {
+  return db.prepare(`SELECT role FROM platform_roles WHERE user_id = ? ORDER BY role ASC`).all(userId).map((row) => row.role);
+}
+
+function getPlatformRoleLabel(role) {
+  switch (role) {
+    case 'platform_admin': return 'Platform Admin';
+    case 'platform_support': return 'Platform Support';
+    case 'platform_operator': return 'Platform Operator';
+    default: return role;
+  }
+}
+
+function getActiveMembershipForUser(user) {
+  if (!user?.id) return null;
+  const memberships = getMembershipsForUser(user.id);
+  if (!memberships.length) return null;
+  const preferred = user.preferred_workspace_id
+    ? memberships.find((membership) => membership.organization_id === user.preferred_workspace_id)
+    : null;
+  return preferred || memberships[0];
+}
+
+function mapMembershipRoleToLegacyRole(role) {
+  switch (role) {
+    case 'owner': return 'company_owner';
+    case 'admin': return 'company_admin';
+    case 'operator': return 'company_agent';
+    default: return 'company_agent';
+  }
+}
+
+function getResolvedActor(req) {
+  const user = getActor(req);
+  if (!user) return null;
+  const platformRoles = getPlatformRolesForUser(user.id);
+  const activeMembership = getActiveMembershipForUser(user);
+
+  if (platformRoles.length > 0) {
+    return {
+      ...user,
+      platform_roles: platformRoles,
+      memberships: getMembershipsForUser(user.id),
+      acting_as_user_id: null,
+      role: platformRoles[0],
+      role_label: getPlatformRoleLabel(platformRoles[0]),
+      organization_id: activeMembership?.organization_id || user.organization_id,
+      active_workspace_id: activeMembership?.organization_id || user.preferred_workspace_id || user.organization_id,
+      active_membership_role: activeMembership?.role || null,
+    };
+  }
+
+  if (activeMembership) {
+    return {
+      ...user,
+      platform_roles: [],
+      memberships: getMembershipsForUser(user.id),
+      acting_as_user_id: null,
+      role: mapMembershipRoleToLegacyRole(activeMembership.role),
+      role_label: activeMembership.role,
+      organization_id: activeMembership.organization_id,
+      active_workspace_id: activeMembership.organization_id,
+      active_membership_role: activeMembership.role,
+    };
+  }
+
+  return {
+    ...user,
+    platform_roles: [],
+    memberships: [],
+    acting_as_user_id: null,
+  };
 }
 
 function getPermissionOverrides(user) {
@@ -1087,7 +1169,7 @@ function requireAuthenticated(req, res, next) {
     return res.status(401).json({ ok: false, error: 'Verified internal identity is required' });
   }
 
-  const actor = getActor(req);
+  const actor = getResolvedActor(req);
   if (!actor) return res.status(401).json({ ok: false, error: 'Unauthorized' });
   if (actor.status !== 'active') return res.status(403).json({ ok: false, error: 'User is not active' });
 
@@ -1221,7 +1303,7 @@ function requirePermission(permissionKey) {
 }
 
 function getActorOrgId(req) {
-  return req.actor?.organization_id || DEFAULT_ORG_ID;
+  return req.actor?.active_workspace_id || req.actor?.organization_id || DEFAULT_ORG_ID;
 }
 
 function getManageableUserById(req, userId) {
@@ -1235,7 +1317,7 @@ function getManageableUserById(req, userId) {
 app.get('/health', (_req, res) => res.json({ ok: true }));
 
 app.get('/api/access/me', requireIdentity, (req, res) => {
-  const actor = getActor(req);
+  const actor = getResolvedActor(req);
   if (actor && PLATFORM_ROLES.has(actor.role)) {
     const org = db.prepare(`SELECT * FROM organizations WHERE id = ? LIMIT 1`).get(actor.organization_id);
     return res.json({
@@ -1281,6 +1363,15 @@ app.get('/api/access/me', requireIdentity, (req, res) => {
         workspaceType: workspace.workspace_type,
         surface: getSurfaceForRole(workspace.user_role),
       },
+      workspaces: actor?.memberships?.map((membership) => ({
+        id: membership.organization_id,
+        name: membership.organization_name,
+        slug: membership.organization_slug,
+        workspaceType: membership.workspace_type,
+        environment: membership.environment || 'customer',
+        membershipRole: membership.role,
+        active: membership.organization_id === actor.active_workspace_id,
+      })) || [],
       user: {
         id: workspace.user_id,
         role: workspace.user_role,
