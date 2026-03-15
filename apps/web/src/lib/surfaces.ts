@@ -19,9 +19,12 @@ export function isPlatformRole(role = '') {
 }
 
 export function buildPrimaryNav({ role, workspaceSlug }: { role: string; workspaceSlug?: string }) {
-  const homeHref = isPlatformRole(role) ? '/control' : `/workspace/${workspaceSlug || 'current'}`;
+  if (isPlatformRole(role)) {
+    return [{ href: '/control', label: 'Control' }];
+  }
+
   return [
-    { href: homeHref, label: isPlatformRole(role) ? 'Control' : 'Workspace' },
+    { href: `/workspace/${workspaceSlug || 'current'}`, label: 'Workspace' },
     { href: '/leads', label: 'Leads' },
     { href: '/inbox', label: 'Inbox' },
     { href: '/reports', label: 'Reports' },

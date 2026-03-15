@@ -9,11 +9,14 @@ export default async function ControlPage({ searchParams }: { searchParams?: { q
   if (!isPlatformRole(meRes.actor.role)) redirect('/dashboard');
 
   const query = (searchParams?.q || '').trim();
-  const directoryRes = await apiFetch<{ users: Array<{ id: string; fullName: string; email: string; roleLabel?: string; role: string; organizationName?: string }>; organizations: Array<{ id: string; name: string; slug?: string; workspace_type: string; created_at: string }> }>(`/api/platform/directory${query ? `?q=${encodeURIComponent(query)}` : ''}`);
+  const directoryRes = query
+    ? await apiFetch<{ users: Array<{ id: string; fullName: string; email: string; roleLabel?: string; role: string; organizationName?: string }>; organizations: Array<{ id: string; name: string; slug?: string; workspace_type: string; created_at: string }> }>(`/api/platform/directory?q=${encodeURIComponent(query)}`)
+    : { users: [], organizations: [] };
   const navItems = buildPrimaryNav({ role: meRes.actor.role, workspaceSlug: meRes.workspace?.slug });
+  const hasResults = directoryRes.users.length > 0 || directoryRes.organizations.length > 0;
 
   return (
-    <AppShell title="Platform control plane" subtitle="Search and access organizations, operators, approvals, and platform activity from a dedicated internal surface." navItems={navItems}>
+    <AppShell title="Platform control plane" subtitle="Search for organizations or users, then open the specific entity you want to inspect." navItems={navItems}>
       <section style={{ ...cardStyle, marginBottom: 16 }}>
         <form method="get" action="/control" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <input name="q" defaultValue={query} placeholder="Search org name, slug, user name, or user email" style={{ ...inputStyle, minWidth: 320 }} />
@@ -22,33 +25,46 @@ export default async function ControlPage({ searchParams }: { searchParams?: { q
         <p style={{ marginBottom: 0, color: '#6b7280' }}>Authenticated as {meRes.actor.email} · {meRes.actor.roleLabel || meRes.actor.role}</p>
       </section>
 
-      <section style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: 16 }}>
-        <article style={cardStyle}>
-          <h2 style={{ marginTop: 0 }}>Users</h2>
-          <div style={{ display: 'grid', gap: 8 }}>
-            {directoryRes.users.length ? directoryRes.users.map((user) => (
-              <div key={user.id} style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 10 }}>
-                <div style={{ fontWeight: 700 }}>{user.fullName}</div>
-                <div style={{ color: '#6b7280', fontSize: 13 }}>{user.email}</div>
-                <div style={{ color: '#6b7280', fontSize: 12 }}>{user.roleLabel || user.role} · {user.organizationName || 'No org'}</div>
+      {!query ? (
+        <section style={cardStyle}>
+          <div style={{ color: '#6b7280' }}>No entities are shown by default in the control plane. Search for an organization or user to open the relevant management context.</div>
+        </section>
+      ) : !hasResults ? (
+        <section style={cardStyle}>
+          <div style={{ color: '#6b7280' }}>No users or organizations matched <strong>{query}</strong>.</div>
+        </section>
+      ) : (
+        <section style={{ display: 'grid', gap: 16 }}>
+          {directoryRes.organizations.length ? (
+            <article style={cardStyle}>
+              <h2 style={{ marginTop: 0 }}>Organizations</h2>
+              <div style={{ display: 'grid', gap: 8 }}>
+                {directoryRes.organizations.map((org) => (
+                  <div key={org.id} style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 10 }}>
+                    <div style={{ fontWeight: 700 }}>{org.name}</div>
+                    <div style={{ color: '#6b7280', fontSize: 12 }}>{org.workspace_type} · slug: {org.slug || '—'}</div>
+                  </div>
+                ))}
               </div>
-            )) : <div style={{ color: '#6b7280' }}>No users matched this search.</div>}
-          </div>
-        </article>
-        <article style={cardStyle}>
-          <h2 style={{ marginTop: 0 }}>Workspaces</h2>
-          <div style={{ display: 'grid', gap: 8 }}>
-            {directoryRes.organizations.length ? directoryRes.organizations.map((org) => (
-              <div key={org.id} style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 10 }}>
-                <div style={{ fontWeight: 700 }}>{org.name}</div>
-                <div style={{ color: '#6b7280', fontSize: 12 }}>{org.workspace_type} · slug: {org.slug || '—'}</div>
-                <div style={{ marginTop: 8 }}><Link href={`/workspace/${org.slug || org.id}`}>Open workspace surface</Link></div>
+            </article>
+          ) : null}
+
+          {directoryRes.users.length ? (
+            <article style={cardStyle}>
+              <h2 style={{ marginTop: 0 }}>Users</h2>
+              <div style={{ display: 'grid', gap: 8 }}>
+                {directoryRes.users.map((user) => (
+                  <div key={user.id} style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 10 }}>
+                    <div style={{ fontWeight: 700 }}>{user.fullName}</div>
+                    <div style={{ color: '#6b7280', fontSize: 13 }}>{user.email}</div>
+                    <div style={{ color: '#6b7280', fontSize: 12 }}>{user.roleLabel || user.role} · {user.organizationName || 'No org'}</div>
+                  </div>
+                ))}
               </div>
-            )) : <div style={{ color: '#6b7280' }}>No organizations matched this search.</div>}
-          </div>
-          <div style={{ marginTop: 12, color: '#6b7280', fontSize: 12 }}>Impersonation should still be introduced later as an explicitly audited action, not a casual click-through.</div>
-        </article>
-      </section>
+            </article>
+          ) : null}
+        </section>
+      )}
     </AppShell>
   );
 }
