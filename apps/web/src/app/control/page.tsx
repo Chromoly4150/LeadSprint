@@ -1,5 +1,4 @@
 import { redirect } from 'next/navigation';
-import Link from 'next/link';
 import { AppShell, cardStyle, inputStyle } from '../../components/app-shell';
 import { WorkspaceSwitcher } from '../../components/workspace-switcher';
 import { apiFetch } from '../../lib/api';
@@ -18,31 +17,52 @@ export default async function ControlPage({ searchParams }: { searchParams?: { q
   const hasResults = directoryRes.users.length > 0 || directoryRes.organizations.length > 0;
 
   return (
-    <AppShell title="Platform control plane" subtitle="Search for organizations or users, then open the specific entity you want to inspect." navItems={navItems} headerExtra={<WorkspaceSwitcher workspaces={meRes.workspaces || []} />}>
-      <section style={{ ...cardStyle, marginBottom: 16 }}>
-        <form action={createTestOrganizationAction} style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
-          <input name="name" placeholder="Create internal test org" style={{ ...inputStyle, minWidth: 280 }} />
-          <button type="submit">Create test organization</button>
-        </form>
-        <form method="get" action="/control" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <input name="q" defaultValue={query} placeholder="Search org name, slug, user name, or user email" style={{ ...inputStyle, minWidth: 320 }} />
+    <AppShell title="LeadSprint" subtitle={undefined} navItems={navItems} headerExtra={
+      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+        <WorkspaceSwitcher workspaces={meRes.workspaces || []} />
+        <details style={{ position: 'relative' }}>
+          <summary style={{ listStyle: 'none', cursor: 'pointer', padding: '8px 12px', borderRadius: 10, border: '1px solid #d1d5db', background: '#fff', fontWeight: 700 }}>⋯</summary>
+          <div style={{ position: 'absolute', right: 0, top: 'calc(100% + 8px)', width: 320, background: '#fff', border: '1px solid #e5e7eb', borderRadius: 14, boxShadow: '0 8px 24px rgba(0,0,0,0.08)', padding: 12, zIndex: 10, display: 'grid', gap: 12 }}>
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+              <div style={{ width: 40, height: 40, borderRadius: 999, background: '#e5e7eb', display: 'grid', placeItems: 'center', fontWeight: 700 }}>
+                {(meRes.user.email || '?').slice(0,1).toUpperCase()}
+              </div>
+              <div>
+                <div style={{ fontWeight: 700 }}>{meRes.user.roleLabel || meRes.user.role}</div>
+                <div style={{ color: '#6b7280', fontSize: 13 }}>{meRes.user.email || 'unknown user'}</div>
+              </div>
+            </div>
+            <div style={{ display: 'grid', gap: 8 }}>
+              <button type="button" style={{ ...inputStyle, background: '#fff', textAlign: 'left', cursor: 'default' }}>Personal & company settings (coming later)</button>
+              <form action={createTestOrganizationAction} style={{ display: 'grid', gap: 8 }}>
+                <input name="name" placeholder="Create internal test org" style={inputStyle} />
+                <button type="submit">Create test organization</button>
+              </form>
+            </div>
+          </div>
+        </details>
+      </div>
+    }>
+      <section style={{ ...cardStyle, minHeight: 420, display: 'grid', alignContent: 'start', justifyItems: 'center', paddingTop: 48 }}>
+        <form method="get" action="/control" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center', width: '100%', maxWidth: 820 }}>
+          <select name="scope" defaultValue="all" style={{ ...inputStyle, minWidth: 180 }}>
+            <option value="all">All</option>
+            <option value="email">Email</option>
+            <option value="name">Name</option>
+            <option value="company">Company name</option>
+          </select>
+          <input name="q" defaultValue={query} placeholder="Search by email, name, or company" style={{ ...inputStyle, minWidth: 420, flex: '1 1 420px' }} />
           <button type="submit">Search</button>
         </form>
-        <p style={{ marginBottom: 0, color: '#6b7280' }}>Authenticated as {meRes.user.email || 'unknown user'} · {meRes.user.roleLabel || meRes.user.role}</p>
-      </section>
 
-      {!query ? (
-        <section style={cardStyle}>
-          <div style={{ color: '#6b7280' }}>No entities are shown by default in the control plane. Search for an organization or user to open the relevant management context.</div>
-        </section>
-      ) : !hasResults ? (
-        <section style={cardStyle}>
-          <div style={{ color: '#6b7280' }}>No users or organizations matched <strong>{query}</strong>.</div>
-        </section>
-      ) : (
-        <section style={{ display: 'grid', gap: 16 }}>
+        {!query ? (
+          <div style={{ color: '#6b7280', marginTop: 18, textAlign: 'center' }}>Search for an organization or user to open the relevant management context.</div>
+        ) : !hasResults ? (
+          <div style={{ color: '#6b7280', marginTop: 18, textAlign: 'center' }}>No users or organizations matched <strong>{query}</strong>.</div>
+        ) : (
+          <section style={{ display: 'grid', gap: 16, width: '100%', maxWidth: 980, marginTop: 24 }}>
           {directoryRes.organizations.length ? (
-            <article style={cardStyle}>
+            <article style={{ ...cardStyle, width: '100%' }}>
               <h2 style={{ marginTop: 0 }}>Organizations</h2>
               <div style={{ display: 'grid', gap: 8 }}>
                 {directoryRes.organizations.map((org) => (
@@ -56,7 +76,7 @@ export default async function ControlPage({ searchParams }: { searchParams?: { q
           ) : null}
 
           {directoryRes.users.length ? (
-            <article style={cardStyle}>
+            <article style={{ ...cardStyle, width: '100%' }}>
               <h2 style={{ marginTop: 0 }}>Users</h2>
               <div style={{ display: 'grid', gap: 8 }}>
                 {directoryRes.users.map((user) => (
@@ -69,8 +89,9 @@ export default async function ControlPage({ searchParams }: { searchParams?: { q
               </div>
             </article>
           ) : null}
-        </section>
-      )}
+          </section>
+        )}
+      </section>
     </AppShell>
   );
 }
